@@ -339,6 +339,9 @@ specLength %>%
 
 ##### trimming of reference database
 
++ here I trimm the reference database using our primers. Note that the primer sequences will be trimmed, too. 
++ also note that bbduk 'removes' the reads that match the primers. We keep and filter the 'removed' hits. 
+
 ```{r, engine = "bash"}
 
 /Applications/bbmap/bbduk2.sh in=nifH_analysis/nifH_dna.fasta \
@@ -380,7 +383,6 @@ specLength %>%
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 ```
-
 
 
 
