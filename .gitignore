@@ -1,0 +1,10 @@
+*.Rproj*
+.Rhistory
+*.RData
+*.html
+*.fa*
+*.txt
+*.xlsx
+*.jpg
+**/
+.DS_Store
