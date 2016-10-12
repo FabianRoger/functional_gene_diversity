@@ -1,0 +1,383 @@
+---
+title: "Analysis of nif_h data"
+output:
+  html_notebook: default
+  html_document: default
+---
+
+```{r, "load.packages"}
+library(dada2)
+library(tidyverse)
+library(knitr)
+library(DECIPHER)
+
+#library(ShortRead)
+
+#library(gridExtra)
+#library(ape)
+#library(phytools)
+
+```
+
+### Files in directory
+```{r}
+
+path <- "~/Documents/01_PhD/01_Research/08_functional_gene_diversity/nifH_analysis/raw_data/"
+fns <- list.files(path)
+
+data.frame(forward = fns[grepl("R1", fns)],
+           reverse = fns[grepl("R2", fns)]) %>% 
+  kable(caption = "Files in directory")
+
+```
+
+### Quality profiles
+```{r}
+fastqs <- fns[grepl(".fastq$", fns)] # if non fastq files in directory
+fastqs <- sort(fastqs) # sort to ensures forward/reverse reads are in same order
+
+fnFs <- fastqs[grepl("_R1", fastqs)] # Just the forward read files
+fnRs <- fastqs[grepl("_R2", fastqs)] # Just the reverse read files
+
+# Get sample names from the first part of the forward read filenames
+sample.names <- sapply(strsplit(fnFs, "_"), `[`, 1)
+
+# Fully specify the path for the fnFs and fnRs
+fnFs <- paste0(path, fnFs)
+fnRs <- paste0(path, fnRs)
+
+
+# plot quality profile of foward reads from first sample
+plotQualityProfile(fnFs[[1]])+
+  scale_y_continuous(limits = c(0,40))+
+  scale_x_continuous(breaks = seq(0,300, 20))+
+  geom_hline(yintercept = 30, colour = "grey", linetype = "dashed")+
+  geom_hline(yintercept = 20, colour = "grey", linetype = "dashed")+
+  labs(title = paste(sample.names[1], "foward", sep =" - "))
+
+# plot quality profile of reverse reads from first sample
+plotQualityProfile(fnRs[[1]])+
+  scale_y_continuous(limits = c(0,40))+
+  scale_x_continuous(breaks = seq(0,300, 20))+
+  geom_hline(yintercept = 30, colour = "grey", linetype = "dashed")+
+  geom_hline(yintercept = 20, colour = "grey", linetype = "dashed")+
+  labs(title = paste(sample.names[1], "reverse", sep =" - "))
+
+
+```
+
+
+We can see the 5 random bases at the start of each sequence in the quality profiles. We will trimm them in the next step. Besides, the quality profiles look as expected, with high qualioty in the foward and lower quality in the reverse read. 
+
+
+### Trimming and paired-end merging of the Primers using fastx & PEAR
+
+We sequenced the **nifH gene**, with the primers **IGK3** and **DVV**
+
+```{r, echo = F}
+
+data.frame(`.` = c( "sequence","direction", "matching position"),
+           IGK3 = c( "GCIWTHTAYGGIAARGGIGGIATHGGIAA", "foward", "19-47"),
+           DVV = c( "ATIGCRAAICCICCRCAIACIACRTC", "reverse", "388-413")) %>% 
+  kable(caption = "primer sequences")
+
+```
+
+The expected fragment is 413 - 19 = 394bp long. 
+Each read is 245 bp long (250bp - 5 random bp) this gives an expected overlap of 2*245bp - 394bp = 96bp
+To ensure an overlapp of at least 50bp, we cannot remove more than 46 bp in total.
+
+We therefore set the pear mergin paramter as follows:
+
++ maximal full length sequence `-m` 400 bp
++ minimal full length sequence `-n` 380 bp
++ minimum quality for two consecutive bases before trimming `-q` 20 (I set this rather low to ensure sufficient overlapp. We will filter with expected error later anyway) 
++ minimum overlapp after trimming `-v` 30
+
+the `-j` flag specifies the number of cores in your computer
+
+You will need the follwong programs to run the script below:
+
++ [fastx tools](http://hannonlab.cshl.edu/fastx_toolkit/)
++ [pear](http://sco.h-its.org/exelixis/web/software/pear/doc.html)
++ [vsearch](https://github.com/torognes/vsearch)
+
+
+```{r, engine = "bash", eval=FALSE}
+
+#here I am going to make two new directories to store
+#output files for each step, as well as statistic files
+
+mkdir nifH_analysis/pear_out nifH_analysis/fastq_filter_out
+
+#change directory to the folder with all the -fastq files - I call it raw_fastq to denote that these are raw data files,
+#but yours may have another name
+
+cd nifH_analysis/raw_data
+
+#The files names we get back from Microsynth have the following format; samplename_SXX_L001_RY_001.fastq,
+#SXX denotes the well position, and RY is R1 (forward) or R2 (reverse). This means that we can list all
+#the files in the directory, then extract the unique sample names to use to match up each pair of files 
+#for a given sample. In this bash command, I get the filenames for all files in the directory that have
+#a .fastq extension. I then 'pipe' a sed command that, for each file name, removes the chunk of text
+#after the '_L001' in the name, leaving me with a list of sample names where each name is duplicated.
+#I then pipe this list to a 'uniq' command that removes the duplicates, leaving me with a list of
+#sample names that are stored in the FILES
+
+FILES=$(ls *.fastq | sed 's/_L001_.*//g' | uniq)
+
+
+#now we can loop through each sample to trim and merge each pair of files, followed by
+#a filtering step using vsearch
+
+for f in $FILES
+do
+	echo $f
+	
+	# trimm random bases
+
+	/Applications/FASTX/fastx_trimmer -i $f'_L001_R1_001.fastq' -f 6 -o ../tmp_1.fastq -Q33
+	/Applications/FASTX/fastx_trimmer -i $f'_L001_R2_001.fastq' -f 6 -o ../tmp_2.fastq -Q33
+	
+	#now I'm going to merge the sequences using pear - this matches and aligns the sequences
+	#in each temp file, then give you statistics on how many reads have been merged, how many failed, 
+	#and so on. You'll get four files as output; assembled, unassembled, 
+	#unassembled.forward and unassembled.reverse, all of which are written to the pear_out directory. 
+	
+	pear -f ../tmp_1.fastq \
+	     -r ../tmp_2.fastq \
+	     -o '../pear_out/'$f \
+	     -m 400 \
+	     -n 380 \
+	     -j 4 \
+	     -q 20 \
+	     -v 30
+
+	#now I'm just deleting the temp files
+	rm ../tmp_*
+
+	#The next step is to further filter out low quality reads using usearch. This determines
+	#the 'maximum expected error' for each sequence - see the usearch page for an explanation if this. 
+	#(http://www.drive5.com/usearch/manual/exp_errs.html). I'm using a maximum error of 1; you may 
+	#want to be more conservative (lower number), but keep in mind that you will lose more sequences, and 1 
+	#is not that liberal regarding expected errors. The filtered files are then stored in the fastq_filter_out folder.
+
+	/Applications/vsearch/bin/vsearch --threads 4 \
+	         --fastq_filter '../pear_out/'$f'.assembled.fastq' \
+	         --fastq_maxee 1 \
+	         --fastq_maxns 0 \
+	         --fastqout '../fastq_filter_out/'$f'.fastq' \
+	         --eeout
+
+	#Now, we need to rename all the sequences in each file to include the sample name 
+	
+	awk -v var=$f '/^@M01867/{sub("@","@"var"_"++i"_")}1' '../fastq_filter_out/'$f'.fastq' > '../fastq_filter_out/'$f'_lab.fastq'
+
+	#just to save room, I'm now deleting the usearch output files and keeping only the relabeled files	
+	rm '../fastq_filter_out/'$f'.fastq'
+	
+#closing the loop
+done
+
+#jumping back one directory
+cd ..
+
+#now I can concatenate all the final, labeled files into a single fastq file, which can then be converted to a fasta file for 
+#the clustering steps using fastx tools
+cat fastq_filter_out/*_lab.fastq > complete_set.fastq
+```
+
+convert fastq to fasta file
+```{r, engine = "bash", eval = FALSE}
+/Applications/FASTX/fastq_to_fasta -i nifH_analysis/complete_set.fastq -o nifH_analysis/complete_set.fasta -Q33
+```
+
+### summary statistics
+```{r}
+
+Raw_read_N <- c()
+
+for (i in seq_along(fnFs)) {
+  N <- system(paste("grep -c '^@M01867'", fnFs[i]), intern = T)
+  Raw_read_N[i] <- as.numeric(N)
+}
+
+assembledReads <- list.files("nifH_analysis/pear_out/")
+assembledReads <- sort(assembledReads[grep(".assembled.", assembledReads, fixed = TRUE)])
+assembledReads <- paste0("~/Documents/01_PhD/01_Research/08_functional_gene_diversity/nifH_analysis/pear_out/", assembledReads)
+
+assembled_Read_N <- c()
+
+for (i in seq_along(assembledReads)) {
+  N <- system(paste("grep -c '^@M01867'", assembledReads[i]), intern = T)
+  assembled_Read_N[i] <- as.numeric(N)
+}
+
+hist((assembled_Read_N/Raw_read_N)*100, main = "% of assembled reads", xlab = "%")
+
+```
+
+
+
+```{r}
+filteredReads <- sort(list.files("nifH_analysis/fastq_filter_out/"))
+filteredReads <- paste0("~/Documents/01_PhD/01_Research/08_functional_gene_diversity/nifH_analysis/fastq_filter_out/", filteredReads)
+
+filtered_Read_N <- c()
+
+for (i in seq_along(filteredReads)) {
+  N <- system(paste("grep -c '^@F'", filteredReads[i]), intern = T)
+  filtered_Read_N[i] <- as.numeric(N)
+}
+
+hist((filtered_Read_N/assembled_Read_N)*100, main = "% of assambled reads that passed filter", xlab = "%")
+
+hist((filtered_Read_N/Raw_read_N)*100, main = "% raw reads that got assembled AND passed filter", xlab = "%")
+
+```
+
+```{r}
+
+
+comp.Length <- fasta.seqlengths("nifH_analysis/complete_set.fasta")
+
+hist(comp.Length, main = "length histogram of complete_set.fasta")
+
+
+```
+
+## vsearch pipeline
+
+#### dereplication
+
++ removing global singletons
+
+```{r, engine = "bash"}
+
+/Applications/vsearch/bin/vsearch --threads 4 \
+		--derep_fulllength nifH_analysis/complete_set.fasta \
+		--minuniquesize 2 \
+		--sizeout \
+		--output nifH_analysis/derep.fa
+
+
+```
+
+#### OTU picking
++ 97% similarity
++ removing singleton OTUs
+
+```{r, engine = "bash"}
+/Applications/vsearch/bin/vsearch --threads 2 \
+    --cluster_size nifH_analysis/derep.fa \
+    --centroids nifH_analysis/otus1_sorted.fa \
+    --id 0.97 \
+    --sizein \
+    --sizeout \
+    --relabel OTU_ \
+    --minsize 2 \
+    --maxaccepts 16 \
+    --wordlength 8 \
+    --strand both \
+    --log nifH_analysis/cluster.log \
+    --sizeorder  \
+    --maxrejects 64
+
+```
+
++ Looking at the representative OTU files, we can see that some sequences have lower case letters. What does this imply?
+
+```{r, engine = "bash"}
+grep -B1 '[atgc]' nifH_analysis/otus1_sorted.fa
+```
+
++ The full OTU_1 sequence is
+
+```{r, engine = "bash"}
+grep -A6 '^>OTU_1;' nifH_analysis/otus1_sorted.fa
+```
+
++ The best match on NCBI BLAST is a chloroplast... 
+
+> Vaucheria litorea chloroplast, complete genome	496	496	97%	2e-136	89%	EU912438.1
+
++ from THE PHYLOGENY AND EVOLUTION OF NITROGENASES J. P. W. YOUNG - chapter 14
+
+> Figure 1 shows a phylogeny based on NifH proteins in the completely sequenced nitrogen-fixers and their recognisable homologs in the same species. The first thing to note is that the true NifH sequences form a clearly defined clade, but there are also a large number of more distant relatives. Some of these are well-known proteins involved in the synthesis of photosynthetic pigments, namely protochlorophyllide reductase (either BchL or ChlL) and chlorin reductase (BchX).
+
++ could it be that we picked up a chloroplast sequence with our primers? 
+
+#### Denovo chimera checking
+```{r, engine="bash"}
+/Applications/vsearch/bin/vsearch --uchime_denovo nifH_analysis/otus1_sorted.fa \
+    --chimeras nifH_analysis/otus1_chimeric_denovo.fa \
+    --nonchimeras nifH_analysis/otus1_denonvo.fa \
+    --uchimeout nifH_analysis/uchime_denovo.tab
+
+```
+
+#### reference chimera checking
+
++ with nifh arb database as reference (all sequences)
+    + File: nifH_2014April04.arb
+    + Downloaded from [here](http://wwwzehr.pmc.ucsc.edu/nifH_Database_Public/)
+    + opened in arb, exported all sequences as fasta (nifH_dna.fasta) (unaligned)
+    + 41231 sequences
+
+```{r}
+
+specLength <- fasta.seqlengths("nifH_analysis/nifH_dna.fasta")
+hist(specLength)
+
+```
+
+
+
+```{r, engine="bash"}
+/Applications/vsearch/bin/vsearch --uchime_ref nifH_analysis/otus1_denonvo.fa \
+    --db nifH_analysis/nifH_dna.fasta \
+    --chimeras nifH_analysis/otus1_chimera_ref.fa \
+    --nonchimeras nifH_analysis/otus_nifh.fa \
+    --uchimeout nifH_analysis/uchime_reference.tab
+
+
+```
+
++ % of chimeric sequences
+```{r}
+NC <- system("grep -c '^>' nifH_analysis/otus1_chimera_ref.fa", intern = TRUE)
+N <- system("grep -c '^>' nifH_analysis/otus_nifh.fa", intern = TRUE)
+(as.numeric(NC) / as.numeric(N)) *100
+```
+
++ % chimeric reads
+```{r}
+N <- 
+  system(" grep '^>' nifH_analysis/otus_nifh.fa | perl -pe 's/^.+=(\\d+);/\\1/g'", intern = TRUE) %>% 
+  as.numeric() %>% 
+  sum()
+
+NC <- 
+  system(" grep '^>' nifH_analysis/otus1_chimera_ref.fa | perl -pe 's/^.+=(\\d+);/\\1/g'", intern = TRUE) %>% 
+  as.numeric() %>% 
+  sum()
+
+
+(NC/N) * 100
+```
+
+The reference chimera detection flags the most abundant OTU, OTU_1 as chimeric. This is unlikely as it is the most abundant sequence in the dataset! 
+
+#### mapping reads to OTUs
+
++ dropping singletons first
+
+```{r, engine="bash", eval = FALSE}
+
+/Applications/vsearch/bin/vsearch --sortbysize nifH_analysis/otus_nifh.fa \
+    --sizein \
+    --minsize 2 \
+    --output nifH_analysis/otus_final_nosingle.fa \
+    --sizeout 
+
+```
