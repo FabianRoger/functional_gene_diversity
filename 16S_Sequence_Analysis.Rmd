@@ -1,0 +1,304 @@
+---
+title: "Analysis of 16S Data"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(phyloseq)
+library(entropart)
+library(vegan)
+```
+
+
+Here I re-analyse the 16 S data, starting from the file **Christian_all1_150.fna** that I got from Jaanis.
+
+The file containes all merged sequences (from all three seasons).
+
+```{r, engine = "bash"}
+head 16S_analysis/Christian_all1_150.fna
+```
+
+```{r, engine = "bash"}
+grep -c '^>' 16S_analysis/Christian_all1_150.fna
+```
+
+
+The Sequenzes were amplified using the following primer:
+```{r}
+data.frame(Name = c("Pro341", "Pro805R"),
+           Sequence=c( "CCTACGGGNBGCASCAG",  "GACTACNVGGGTATCTAATCC")) %>% 
+  kable()
+```
+
+#### Primer filterring and trimming
+
++ I search for the two primers
++ filter out only sequences that match both primer (with 1 allowed missmatch)
++ I look for the reverse complement, too, in order to match reverse primer
+
+```{r, engine = "bash"}
+
+/Applications/bbmap/bbduk2.sh in=16S_analysis/Christian_all1_150.fna \
+      fliteral=CCTACGGGNBGCASCAG,GACTACNVGGGTATCTAATCC \
+			minkmerhits=2 \
+			k=17 \
+			copyundefined \
+			rcomp=t \
+			hammingdistance=1 \
+			outm='16S_analysis/with_Primer.fasta' \
+			out='16S_analysis/no_F_Primer.fasta' \
+			stats='16S_analysis/Primer_stats.txt'\
+      overwrite=true \
+			-Xmx6g
+```
+
++ trimming of the primers (and any seqeunce before the foward or after the reverse primer, if any)
+
+```{r, engine = "bash"}
+
+/Applications/bbmap/bbduk2.sh in=16S_analysis/with_Primer.fasta \
+			lliteral=CCTACGGGNBGCASCAG\
+      rliteral=GACTACNVGGGTATCTAATCC\
+			k=17 \
+			copyundefined \
+			rcomp=t \
+			hammingdistance=1 \
+			out='16S_analysis/trimmed_Primer.fasta' \
+      overwrite=true \
+			-Xmx6g
+```
+
+
+```{r, engine = "bash"}
+
+/Applications/bbmap/bbduk.sh in=16S_analysis/trimmed_Primer.fasta lhist=16S_analysis/lhist.txt
+
+
+```
+
+```{r}
+
+hist <- read.table("16S_analysis/lhist.txt")
+
+ggplot(hist, aes(x = V1, y = V2))+
+  geom_bar(stat = "identity")+
+  labs(title = "histrogram of read length")
+
+ggplot(hist, aes(x = V1, y = V2))+
+  geom_bar(stat = "identity")+
+  labs(title = "read length of middle 98% of reads")+
+  scale_x_continuous(limits= quantile(rep(hist$V1, hist$V2), c(0.01, 0.99)))
+
+
+```
+
+#### dereplication
+
++ removing global singletons
+
+```{r, engine = "bash"}
+
+/Applications/vsearch/bin/vsearch --threads 2 \
+		--derep_fulllength 16S_analysis/trimmed_Primer.fasta \
+		--minuniquesize 2 \
+		--sizeout \
+		--output 16S_analysis/derep.fa
+
+
+```
+
+#### OTU picking
++ 97% similarity
++ removing singleton OTUs
+
+```{r, engine = "bash"}
+/Applications/vsearch/bin/vsearch --threads 2 \
+    --cluster_size 16S_analysis/derep.fa \
+    --centroids 16S_analysis/otus1_sorted.fa \
+    --id 0.97 \
+    --sizein \
+    --sizeout \
+    --relabel OTU_ \
+    --minsize 2 \
+    --maxaccepts 16 \
+    --wordlength 8 \
+    --strand both \
+    --log 16S_analysis/cluster.log \
+    --sizeorder  \
+    --maxrejects 64
+
+```
+
+#### Denovo chimera checking
+```{r, engine="bash"}
+/Applications/vsearch/bin/vsearch --uchime_denovo 16S_analysis/otus1_sorted.fa \
+    --chimeras 16S_analysis/otus1_chimeric_denovo.fa \
+    --nonchimeras 16S_analysis/otus1_denonvo.fa \
+    --uchimeout 16S_analysis/uchime_denovo.tab
+
+```
+
+
+#### reference chimera checking
+
++ with SILVA SUU as reference database
+    + File: SSURef_NR99_128_SILVA_07_09_16_opt.arb
+    + Downloaded from [here](https://www.arb-silva.de/download/arb-files/)
+    + SUU - REF NR 99
+    + opened in arb, exported all bacteria & archea species as fasta (Silva_SSU.fasta) (unaligned)
+    + 576554 sequences
+    
+```{r, engine="bash"}
+/Applications/vsearch/bin/vsearch --uchime_ref 16S_analysis/otus1_denonvo.fa \
+    --db 16S_analysis/Silva_SSU.fasta \
+    --chimeras 16S_analysis/otus1_chimera_ref.fa \
+    --nonchimeras 16S_analysis/otus_16s_final.fa \
+    --uchimeout 16S_analysis/uchime_reference.tab
+
+
+```
+
++ % of chimeric sequences
+```{r}
+NC <- system("grep -c '^>' 16S_analysis/otus1_chimera_ref.fa", intern = TRUE)
+N <- system("grep -c '^>' 16S_analysis/otus_16s_final.fa", intern = TRUE)
+(as.numeric(NC) / as.numeric(N)) *100
+```
+
++ % chimeric reads
+```{r}
+N <- 
+  system(" grep '^>' 16S_analysis/otus_16s_final.fa | perl -pe 's/^.+=(\\d+);/\\1/g'", intern = TRUE) %>% 
+  as.numeric() %>% 
+  sum()
+
+NC <- 
+  system(" grep '^>' 16S_analysis/otus1_chimera_ref.fa | perl -pe 's/^.+=(\\d+);/\\1/g'", intern = TRUE) %>% 
+  as.numeric() %>% 
+  sum()
+
+
+(NC/N) * 100
+```
+
+
+#### mapping reads to OTUs
+
++ dropping singletons first
+
+```{r, engine="bash"}
+
+/Applications/vsearch/bin/vsearch --sortbysize 16S_analysis/otus_16s_final.fa \
+    --sizein \
+    --minsize 2 \
+    --output 16S_analysis/otus_final_nosingle.fa \
+    --sizeout 
+
+```
+
++ mapping reads
+
+```{r, engine = "bash"}
+/Applications/vsearch/bin/vsearch --usearch_global 16S_analysis/trimmed_Primer.fasta \
+    --db 16S_analysis/otus_final_nosingle.fa \
+    --id 0.97 \
+    --self \
+    --maxaccepts 16 \
+    --wordlength 8 \
+    --strand both \
+    --log cluster.log \
+    --maxrejects 64 \
+    --uc 16S_analysis/otu_table_map.uc
+```
+
+
+```{r}
+OTU <- import_usearch_uc("16S_analysis/otu_table_map.uc")
+write.table(OTU, "OTU_16S.txt", sep = "\t")
+```
+
+```{r}
+colSums(OTU) %>% 
+  as.data.frame %>% 
+  ggplot(., aes(x = `.`))+
+  geom_histogram(bins = 40)+
+  scale_x_log10(breaks = c(2^seq(1,20,1)))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+  labs(title = "histogramm of OTU abundances - log scale")
+
+```
+
+### compare raw OTU table with OTU table from previous analyis
+
+```{r}
+
+OTU_old <- read.table("~/Documents/01_PhD/01_Research/07_habitat_diveristy/otutable.txt", header = T)
+OTU_old <- select(OTU_old, -OTU_ID)
+```
+
++ compare number of reads in each sample
+
+```{r}
+Reads.comp <- 
+  data.frame(new = rowSums(OTU)) %>% 
+  rownames_to_column(var = "samples") %>% 
+  left_join(., rownames_to_column(data.frame(old = colSums(OTU_old)), var = "samples"))
+
+ggplot(Reads.comp, aes(x = old, y = new))+
+  geom_point()+
+  stat_smooth(method = "lm", se = F)+
+  labs(title = "number of reads per sample")
+```
+
++ compare OTU richness in each sample (not rarefied)
+```{r}
+
+Div.comp <- 
+  data.frame(new = specnumber(OTU)) %>% 
+  rownames_to_column(var = "samples") %>% 
+  left_join(., rownames_to_column(data.frame(old = specnumber(t(OTU_old))), var = "samples"))
+
+
+ggplot(Div.comp, aes(x = old, y = new))+
+  geom_point()+
+  stat_smooth(method = "lm", se = F)+
+  labs(title = "number of OTUs per sample")
+
+```
+
+
++ compare OTU effective number of species in each sample (not rarefied)
+```{r}
+
+Div.comp <- 
+  data.frame(new = specnumber(OTU)) %>% 
+  rownames_to_column(var = "samples") %>% 
+  left_join(., rownames_to_column(data.frame(old = specnumber(t(OTU_old))), var = "samples"))
+
+
+ggplot(Div.comp, aes(x = old, y = new))+
+  geom_point()+
+  stat_smooth(method = "lm", se = F)+
+  labs(title = "number of OTUs per sample")
+
+```
+
+```{r, warnings = F}
+MC_old <- MetaCommunity(OTU_old[, -1])
+MC <- MetaCommunity(t(OTU))
+
+
+Eff.comp <- 
+  data.frame(new = AlphaDiversity(MC, q = 1, Correction = "None")$Communities) %>% 
+  rownames_to_column(var = "samples") %>% 
+  left_join(., rownames_to_column(data.frame(old = AlphaDiversity(MC_old, q = 1, Correction = "None")$Communities), var = "samples"))
+
+ggplot(Eff.comp, aes(x = old, y = new))+
+  geom_point()+
+  stat_smooth(method = "lm", se = F)+
+  labs(title = "Effective number os species per sample")
+
+```
+?AlphaDiversity
