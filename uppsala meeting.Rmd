@@ -1,0 +1,369 @@
+---
+title: "functional gene diversity"
+author: "Fabian Roger"
+date: "6 Dec 2015"
+output:
+  html_document:
+    fig_caption: yes
+    toc: yes
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warnings = FALSE, message = FALSE)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+```
+
+
+### Background
+
+Christian et al. have conducted an experiment were they took sediment cores from 4 different habitat types and incubated them together as either of four treatments:
+
++ single habitat
++ two habitats
++ three habitats
++ four habitats
+
+the habitat that they sampled were
+
++ sediment covered by Cyanobacterial mats
++ sediment covered by Rupia sp medow
++ bare sand
++ silty sediment
+
+The eyperiment was conducted three times in **spring**, **summer**, and **autumn**
+
+The response variables that were measured include flux measurements of 
+
++ denitrification
++ nitrogene fixation
+
+as well as
++ Bacterial community diverisity & composition (16S RNA)
++ DIN / NH~4~ + NO~3~
+
+### Rational for follow-up project
+
+#### nitrogene fixation
+
+There is a strong response between Habitat diveristy and nitrogene fixation in Summer
+
+
+```{r, echo = FALSE, warning=FALSE}
+
+HabDiv <- read.table("Alsterberg.txt", header = T)
+HabDiv$habtype <- c( rep(c("sand", "silt", "cyano", "ruppia"), each = 4), rep( NA, 12))
+
+HabDiv %>% 
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitatdiv, y = N2fix, colour = as.factor(habitats), group = 1))+
+  geom_point()+
+  stat_smooth(method = "lm")+
+  labs(title = "nitrogene fixation in summer", y = "nitrogene fixation", 
+       x = "habitat diversity (multivariate distance)")+
+  theme_bw()
+
+
+HabDiv %>%
+  filter( season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = N2fix, colour = as.factor(habitats), group = 1))+
+  geom_point()+
+  stat_smooth(method = "lm")+
+  labs(title = "nitrogene fixation in summer", y = "nitrogene fixation", 
+       x = "habitat diversity (nominal diversity)")+
+  theme_bw()
+```
+
+However, nitrogene fixation is not well correlated with overall bacterial diveristy
+
+```{r, echo = FALSE}
+
+HabDiv %>%
+  dplyr::filter(season == "B_summer") %>% 
+  ggplot( aes( x = gamma, y = N2fix))+
+  geom_point()+
+  stat_smooth(method = "lm")+
+  labs(title = "nitrogene fixation in summer", y = "nitrogene fixation", 
+       x = "bacterial phylogenetic diveristy")+
+  theme_bw()
+
+```
+
+**can nitrogene fixation be explained by the diveristy of N2 fixing bacteria**
+
+We can approach this question from two angles:
+
++ diveristy of nitrogene fixing bacteria
+  + functional prediction of predicted OTUs with PICRUST
+  + using 16S data
+  + calculating diveristy of bacteria that are predicted to participate in N fixation
+  
++ diveristy of nifH genes
+  + functional gene diveristy (to be seqeunced)
+  + does not necessarliy match 16S species OTUs
+  + does not rely on prediction and / or phylogenetic inference
+  
+We unfortuanelty have no RNA samples so we can't look at which bacteria actively express nifH.
+(Or have we?)
+
+
+#### denitrification
+
+Christian et al also measured **denitrification**.
+
+```{r}
+HabDiv %>% 
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitatdiv, y = denitrification, colour = as.factor(habitats), group = 1))+
+  geom_point()+
+  stat_smooth(method = "lm")+
+  labs(title = "denitrification in summer", y = "denitrification", 
+       x = "habitat diversity (multivariate distance)")+
+  theme_bw()
+
+HabDiv %>% 
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = denitrification, colour = as.factor(habitats), group = 1))+
+  geom_point()+
+  stat_smooth(method = "lm")+
+  labs(title = "denitrification in summer", y = "denitrification", 
+       x = "habitat diversity (nominal diversity)")+
+  theme_bw()
+
+
+HabDiv %>%
+  dplyr::filter(season == "B_summer") %>% 
+  ggplot( aes( x = gamma, y = denitrification))+
+  geom_point()+
+  stat_smooth(method = "lm")+
+  labs(title = "denitrification in summer", y = "nitrogene fixation", 
+       x = "bacterial phylogenetic diveristy")+
+  theme_bw()
+
+```
+
+### N - fixation all seasons
+```{r}
+
+HabDiv %>%
+  ggplot( aes( x = habitats, y = N2fix, colour = as.factor(habitats), group = 1))+
+  geom_point()+
+  facet_wrap(~season, scales = "free_y")+
+  stat_smooth(method = "lm")+
+  labs(title = "nitrogene fixation", y = "nitrogene fixation", 
+       x = "habitat diversity (nominal diversity)")+
+  theme_bw()+
+  theme(legend.position = "bottom")
+
+HabDiv %>%
+  ggplot( aes( x = season, y = N2fix, fill = season))+
+  geom_boxplot()+
+  labs(title = "nitrogene fixation", y = "nitrogene fixation")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+HabDiv %>%
+  ggplot( aes( x = gamma, y = N2fix, colour = as.factor(habitats), group = 1))+
+  geom_point()+
+  facet_wrap(~season, scales = "free_y")+
+  stat_smooth(method = "lm")+
+  labs(title = "nitrogene fixation in summer", y = "nitrogene fixation", 
+       x = "bacterial phylogenetic diveristy")+
+  theme_bw()+
+  theme(legend.position = "bottom")
+
+HabDiv %>%
+  filter(habitats == 1) %>% 
+  ggplot( aes( x = habtype, y = N2fix, colour = habtype, group = 1))+
+  geom_point()+
+  facet_wrap(~season, scales = "free_y")+
+  labs(title = "nitrogene fixation habitat level 1", y = "nitrogene fixation", 
+       x = "habitats")+
+  theme_bw()+
+  theme(legend.position = "bottom")
+
+
+
+```
+
+**look at plots of porwater DIN over seasons**
+
+
+### denitrification all seasons
+
+```{r}
+
+HabDiv %>%
+  ggplot( aes( x = habitats, y = denitrification, colour = as.factor(habitats), group = 1))+
+  geom_point()+
+  facet_wrap(~season, scales = "free_y")+
+  stat_smooth(method = "lm")+
+  labs(title = "denitrification", y = "denitrification", 
+       x = "habitat diversity (nominal diversity)")+
+  theme_bw()+
+  theme(legend.position = "bottom")
+
+HabDiv %>%
+  ggplot( aes( x = season, y = denitrification, fill = season))+
+  geom_boxplot()+
+  labs(title = "denitrification", y = "denitrification")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+HabDiv %>%
+  filter(habitats == 1) %>% 
+  ggplot( aes( x = habtype, y = denitrification, colour = habtype, group = 1))+
+  geom_point()+
+  facet_wrap(~season, scales = "free_y")+
+  labs(title = "denitrification habitat level 1", y = "nitrogene fixation", 
+       x = "habitats")+
+  theme_bw()+
+  theme(legend.position = "bottom")
+
+HabDiv %>%
+  ggplot( aes( x = gamma, y = denitrification, colour = as.factor(habitats), group = 1))+
+  geom_point()+
+  facet_wrap(~season, scales = "free")+
+  stat_smooth(method = "lm")+
+  labs(title = "denitrification", y = "denitrification", 
+       x = "bacterial phylogenetic diveristy")+
+  theme_bw()+
+  theme(legend.position = "bottom")
+```
+
+
+###nitrogene fixation and denitrification by habitat composition
+```{r}
+filter(HabDiv, season == "B_summer" & habitats ==2)
+
+hab1 <- data.frame(REP = c("A", "B", "C", "D"),
+                   Cyano = c(rep("N",8), rep("Y",4), rep("N", 4)),
+                   Silt = c(rep("N",4), rep("Y",4), rep("N", 8)),
+                   Sand = c(rep("Y",4),rep("N",12)),
+                   Ruppia = c(rep("N",12),rep("Y",4)))
+
+
+hab2 <- data.frame(REP = c("A", "B", "C", "D"),
+                   Cyano = c("N", "Y", "N", "Y"),
+                   Silt = c("Y", "N", "Y", "N"),
+                   Sand = c("N", "N", "Y", "Y"),
+                   Ruppia = c("Y", "Y", "N", "N"))
+
+hab3 <- data.frame(REP = c("A", "B", "C", "D"),
+                   Cyano = c("Y", "N", "N", "Y"),
+                   Silt = c("Y", "Y", "Y", "Y"),
+                   Sand = c("Y", "Y", "Y", "N"),
+                   Ruppia = c("N", "Y", "Y", "Y"))
+
+hab4 <- data.frame(REP = c("A", "B", "C", "D"),
+                   Cyano = c(rep("Y",4)),
+                   Silt = c(rep("Y",4)),
+                   Sand = c(rep("Y",4)),
+                   Ruppia = c(rep("Y",4)))
+
+
+
+hab1234 <- do.call("rbind", list(hab1, hab2, hab3, hab4))
+
+HabDiv <- cbind(HabDiv, hab1234)
+
+D1 <- HabDiv %>%
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = denitrification, colour = Cyano))+
+  geom_point()+
+  labs(title = "denitrification - cyano", y = "denitrification", 
+       x = "")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+D2 <- HabDiv %>%
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = denitrification, colour = Ruppia))+
+  geom_point()+
+  labs(title = "denitrification - ruppia", y = "denitrification", 
+       x = "")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+D3 <- HabDiv %>%
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = denitrification, colour = Sand))+
+  geom_point()+
+  labs(title = "denitrification - sand", y = "denitrification", 
+       x = "nominal habitat diveristy")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+D4 <- HabDiv %>%
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = denitrification, colour = Cyano))+
+  geom_point()+
+  labs(title = "denitrification - silt", y = "denitrification", 
+       x = "nominal habitat diveristy")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+grid.arrange(D1,D2,D3,D4)
+
+
+N1 <- HabDiv %>%
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = N2fix, colour = Cyano))+
+  geom_point()+
+  labs(title = "nitrogen fixation - cyano", y = "denitrification", 
+       x = "")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+N2 <- HabDiv %>%
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = N2fix, colour = Ruppia))+
+  geom_point()+
+  labs(title = "nitrogen fixation - ruppia", y = "denitrification", 
+       x = "")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+N3 <- HabDiv %>%
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = N2fix, colour = Sand))+
+  geom_point()+
+  labs(title = "nitrogen fixation - sand", y = "denitrification", 
+       x = "nominal habitat diveristy")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+N4 <- HabDiv %>%
+  filter(season == "B_summer") %>% 
+  ggplot( aes( x = habitats, y = N2fix, colour = Cyano))+
+  geom_point()+
+  labs(title = "nitrogen fixation - silt", y = "denitrification", 
+       x = "nominal habitat diveristy")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+grid.arrange(N1,N2,N3,N4)
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+>  Single-factor experiments suggest that salinity (Severin et al. 2012), concentrations of dissolved inorganic nitrogen (DIN; Capone and Carpenter 1982), quantity and quality of organic matter (Howarth et al. 1988b; Fulweiler et al. 2008), and oxygen conditions (Bebout et al. 1987; Bertics et al. 2010) all control benthic nitrogenase activity 
+>For example, increased (. 10 mmol L21) concentrations of ammonium have generally been found to inhibit, but not completely suppress, NA (Knapp 2012)
+
+(Andersson et al 2014)
+
+> It would therefore be wise for researchers interested in assessing the diversity and phylogeny of nitrogen-fixation genes from the environment to screen their sequences for the presence of cluster IV and cluster V genes prior to OTU clustering.
+
+(Gabey and Bukley 2012)
