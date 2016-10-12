@@ -12,7 +12,6 @@ library(knitr)
 library(DECIPHER)
 
 #library(ShortRead)
-
 #library(gridExtra)
 #library(ape)
 #library(phytools)
@@ -321,21 +320,73 @@ grep -A6 '^>OTU_1;' nifH_analysis/otus1_sorted.fa
 + with nifh arb database as reference (all sequences)
     + File: nifH_2014April04.arb
     + Downloaded from [here](http://wwwzehr.pmc.ucsc.edu/nifH_Database_Public/)
-    + opened in arb, exported all sequences as fasta (nifH_dna.fasta) (unaligned)
-    + 41231 sequences
+    + opened in arb, exported all sequences in tree as fasta (nifH_dna.fasta) (unaligned)
+    + tree\_RepSeq\_...\_2014...
+    + 6212 sequences
 
 ```{r}
 
 specLength <- fasta.seqlengths("nifH_analysis/nifH_dna.fasta")
-hist(specLength)
+
+specLength %>%
+  as_data_frame() %>% 
+  ggplot(., aes(x = value))+
+  geom_histogram(binwidth = 100)+
+  scale_x_continuous(breaks = seq(0,2500, 200))+
+  labs(x = "length", title = "seqeuncing length distribution in reference db")
+
+```
+
+##### trimming of reference database
+
+```{r, engine = "bash"}
+
+/Applications/bbmap/bbduk2.sh in=nifH_analysis/nifH_dna.fasta \
+      fliteral=GCIWTHTAYGGIAARGGIGGIATHGGIAA,ATIGCRAAICCICCRCAIACIACRTC \
+			minkmerhits=2 \
+			k=17 \
+			copyundefined \
+			rcomp=t \
+			hammingdistance=1 \
+			outm=nifH_analysis/nifH_dna_wP.fasta \
+      overwrite=true \
+			-Xmx6g
+
+
+/Applications/bbmap/bbduk2.sh in=nifH_analysis/nifH_dna_wP.fasta \
+			lliteral=GCIWTHTAYGGIAARGGIGGIATHGGIAA \
+      rliteral=ATIGCRAAICCICCRCAIACIACRTC \
+			k=17 \
+			copyundefined \
+			rcomp=t \
+			hammingdistance=1 \
+			out=nifH_analysis/nifH_dna_trimmed.fasta \
+      overwrite=true \
+			-Xmx6g
+			
+rm nifH_analysis/nifH_dna_wP.fasta
+```
+
+```{r}
+
+specLength <- fasta.seqlengths("nifH_analysis/nifH_dna_trimmed.fasta")
+
+specLength %>%
+  as_data_frame() %>% 
+  ggplot(., aes(x = value))+
+  geom_histogram()+
+  #scale_x_continuous(breaks = seq(350,450, 4), limits=c(360, 450))+
+  labs(x = "length", title = "seqeuncing length distribution in reference db\ncut with primers")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 ```
 
 
 
+
 ```{r, engine="bash"}
-/Applications/vsearch/bin/vsearch --uchime_ref nifH_analysis/otus1_denonvo.fa \
-    --db nifH_analysis/nifH_dna.fasta \
+/Applications/vsearch/bin/vsearch --uchime_ref nifH_analysis/otus1_sorted.fa \
+    --db nifH_analysis/nifH_dna_trimmed.fasta \
     --chimeras nifH_analysis/otus1_chimera_ref.fa \
     --nonchimeras nifH_analysis/otus_nifh.fa \
     --uchimeout nifH_analysis/uchime_reference.tab
@@ -380,4 +431,19 @@ The reference chimera detection flags the most abundant OTU, OTU_1 as chimeric. 
     --output nifH_analysis/otus_final_nosingle.fa \
     --sizeout 
 
+```
+
++ mapping reads
+
+```{r, engine = "bash"}
+/Applications/vsearch/bin/vsearch --usearch_global nifH_analysis/complete_set.fasta \
+    --db nifH_analysis/otus_final_nosingle.fa \
+    --id 0.97 \
+    --self \
+    --maxaccepts 16 \
+    --wordlength 8 \
+    --strand both \
+    --log cluster.log \
+    --maxrejects 64 \
+    --uc 16S_analysis/otu_table_nifh.uc
 ```
