@@ -1,20 +1,35 @@
 ---
 title: "Analysis of nif_h data"
 output:
-  html_notebook: default
-  html_document: default
+  html_document:
+    toc: true
+    depth: 5
+    theme: united 
 ---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
 
 ```{r, "load.packages"}
 library(dada2)
+library(phyloseq)
 library(tidyverse)
+library(ggtree)
+library(RColorBrewer)
 library(knitr)
 library(DECIPHER)
+library(seqinr)
+library(parallel)
+library(Biostrings)
+library(geiger)
+
+#library(phytools)
 
 #library(ShortRead)
 #library(gridExtra)
 #library(ape)
-#library(phytools)
+
 
 ```
 
@@ -66,7 +81,7 @@ plotQualityProfile(fnRs[[1]])+
 ```
 
 
-We can see the 5 random bases at the start of each sequence in the quality profiles. We will trimm them in the next step. Besides, the quality profiles look as expected, with high qualioty in the foward and lower quality in the reverse read. 
+We can see the 5 random bases at the start of each sequence in the quality profiles. We will trim them in the next step. Besides, the quality profiles look as expected, with high quality in the forward and lower quality in the reverse read. 
 
 
 ### Trimming and paired-end merging of the Primers using fastx & PEAR
@@ -84,18 +99,18 @@ data.frame(`.` = c( "sequence","direction", "matching position"),
 
 The expected fragment is 413 - 19 = 394bp long. 
 Each read is 245 bp long (250bp - 5 random bp) this gives an expected overlap of 2*245bp - 394bp = 96bp
-To ensure an overlapp of at least 50bp, we cannot remove more than 46 bp in total.
+To ensure an overlap of at least 50bp, we cannot remove more than 46 bp in total.
 
-We therefore set the pear mergin paramter as follows:
+We therefore set the pear merging parameter as follows:
 
 + maximal full length sequence `-m` 400 bp
 + minimal full length sequence `-n` 380 bp
-+ minimum quality for two consecutive bases before trimming `-q` 20 (I set this rather low to ensure sufficient overlapp. We will filter with expected error later anyway) 
-+ minimum overlapp after trimming `-v` 30
++ minimum quality for two consecutive bases before trimming `-q` 20 (I set this rather low to ensure sufficient overlap. We will filter with expected error later anyway) 
++ minimum overlap after trimming `-v` 30
 
 the `-j` flag specifies the number of cores in your computer
 
-You will need the follwong programs to run the script below:
+You will need the following programs to run the script below:
 
 + [fastx tools](http://hannonlab.cshl.edu/fastx_toolkit/)
 + [pear](http://sco.h-its.org/exelixis/web/software/pear/doc.html)
@@ -247,7 +262,7 @@ hist(comp.Length, main = "length histogram of complete_set.fasta")
 
 ## vsearch pipeline
 
-#### dereplication
+### dereplication
 
 + removing global singletons
 
@@ -262,11 +277,11 @@ hist(comp.Length, main = "length histogram of complete_set.fasta")
 
 ```
 
-#### OTU picking
+### OTU picking
 + 97% similarity
 + removing singleton OTUs
 
-```{r, engine = "bash"}
+```{r, engine = "bash", eval=FALSE}
 /Applications/vsearch/bin/vsearch --threads 2 \
     --cluster_size nifH_analysis/derep.fa \
     --centroids nifH_analysis/otus1_sorted.fa \
@@ -284,30 +299,9 @@ hist(comp.Length, main = "length histogram of complete_set.fasta")
 
 ```
 
-+ Looking at the representative OTU files, we can see that some sequences have lower case letters. What does this imply?
 
-```{r, engine = "bash"}
-grep -B1 '[atgc]' nifH_analysis/otus1_sorted.fa
-```
-
-+ The full OTU_1 sequence is
-
-```{r, engine = "bash"}
-grep -A6 '^>OTU_1;' nifH_analysis/otus1_sorted.fa
-```
-
-+ The best match on NCBI BLAST is a chloroplast... 
-
-> Vaucheria litorea chloroplast, complete genome	496	496	97%	2e-136	89%	EU912438.1
-
-+ from THE PHYLOGENY AND EVOLUTION OF NITROGENASES J. P. W. YOUNG - chapter 14
-
-> Figure 1 shows a phylogeny based on NifH proteins in the completely sequenced nitrogen-fixers and their recognisable homologs in the same species. The first thing to note is that the true NifH sequences form a clearly defined clade, but there are also a large number of more distant relatives. Some of these are well-known proteins involved in the synthesis of photosynthetic pigments, namely protochlorophyllide reductase (either BchL or ChlL) and chlorin reductase (BchX).
-
-+ could it be that we picked up a chloroplast sequence with our primers? 
-
-#### Denovo chimera checking
-```{r, engine="bash"}
+### Denovo chimera checking
+```{r, engine="bash", eval = FALSE}
 /Applications/vsearch/bin/vsearch --uchime_denovo nifH_analysis/otus1_sorted.fa \
     --chimeras nifH_analysis/otus1_chimeric_denovo.fa \
     --nonchimeras nifH_analysis/otus1_denonvo.fa \
@@ -315,16 +309,14 @@ grep -A6 '^>OTU_1;' nifH_analysis/otus1_sorted.fa
 
 ```
 
-#### reference chimera checking
+### reference chimera checking
 
 + with nifh arb database as reference (all sequences)
     + File: nifH_2014April04.arb
     + Downloaded from [here](http://wwwzehr.pmc.ucsc.edu/nifH_Database_Public/)
     + opened in arb, exported all sequences in tree as fasta (nifH_dna.fasta) (unaligned)
-    + tree\_RepSeq\_...\_2014...
-    + 6212 sequences
 
-```{r}
+```{r, eval = FALSE}
 
 specLength <- fasta.seqlengths("nifH_analysis/nifH_dna.fasta")
 
@@ -337,16 +329,17 @@ specLength %>%
 
 ```
 
-##### trimming of reference database
+#### trimming of reference database
 
-+ here I trimm the reference database using our primers. Note that the primer sequences will be trimmed, too. 
++ here I trim the reference database using our primers. Note that the primer sequences will be trimmed, too. 
 + also note that bbduk 'removes' the reads that match the primers. We keep and filter the 'removed' hits. 
++ finally, to keep more reads and because the database is composed of many short reads, I only require 1 primer to be found. 
 
-```{r, engine = "bash"}
+```{r, engine = "bash", eval = FALSE}
 
 /Applications/bbmap/bbduk2.sh in=nifH_analysis/nifH_dna.fasta \
-      fliteral=GCIWTHTAYGGIAARGGIGGIATHGGIAA,ATIGCRAAICCICCRCAIACIACRTC \
-			minkmerhits=2 \
+      fliteral=ATIGCRAAICCICCRCAIACIACRTC,GCIWTHTAYGGIAARGGIGGIATHGGIAA \
+			minkmerhits=1 \
 			k=17 \
 			copyundefined \
 			rcomp=t \
@@ -354,7 +347,6 @@ specLength %>%
 			outm=nifH_analysis/nifH_dna_wP.fasta \
       overwrite=true \
 			-Xmx6g
-
 
 /Applications/bbmap/bbduk2.sh in=nifH_analysis/nifH_dna_wP.fasta \
 			lliteral=GCIWTHTAYGGIAARGGIGGIATHGGIAA \
@@ -370,23 +362,23 @@ specLength %>%
 rm nifH_analysis/nifH_dna_wP.fasta
 ```
 
-```{r}
+```{r, eval = FALSE}
 
 specLength <- fasta.seqlengths("nifH_analysis/nifH_dna_trimmed.fasta")
 
 specLength %>%
   as_data_frame() %>% 
   ggplot(., aes(x = value))+
-  geom_histogram()+
-  #scale_x_continuous(breaks = seq(350,450, 4), limits=c(360, 450))+
+  geom_histogram(binwidth = 3)+
+  #scale_x_continuous(breaks = seq(250,450, 1), limits=c(315, 350))+
   labs(x = "length", title = "seqeuncing length distribution in reference db\ncut with primers")+
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 ```
 
++ reference chimera checking
 
-
-```{r, engine="bash"}
+```{r, engine="bash", eval = FALSE}
 /Applications/vsearch/bin/vsearch --uchime_ref nifH_analysis/otus1_sorted.fa \
     --db nifH_analysis/nifH_dna_trimmed.fasta \
     --chimeras nifH_analysis/otus1_chimera_ref.fa \
@@ -419,15 +411,210 @@ NC <-
 (NC/N) * 100
 ```
 
-The reference chimera detection flags the most abundant OTU, OTU_1 as chimeric. This is unlikely as it is the most abundant sequence in the dataset! 
+In total, only very few reads are identified as chimeric. 
 
-#### mapping reads to OTUs
+
+### checking for frameshifts
+
+Here, we check the file of representative sequences `otus_nifh.fa` for frameshifts. For that we need an hmm profile that we build from the protein reference alignment. 
+
+We build the hmmfile with [hmmbuild](http://hmmer.org) taking the nifh protein alignment from the arb database as input. 
+
++ with nifh arb database as reference (all sequences)
+    + File: nifH_2014April04.arb
+    + Downloaded from [here](http://wwwzehr.pmc.ucsc.edu/nifH_Database_Public/)
+    + opened in arb, choose protein alignment (`ali_nifHprot`)
+    + 41231
+
+**the alignment has some sequences in it that are not valid protein sequences**
+
+We read it into R and check for invalid sequences by grepping for sequences that do not match valid AA characters:
+
+
+```{r}
+
+paste(c("^[", paste(AA_ALPHABET[1:26], collapse = ","),"]$"), collapse  = "")
+
+nifh_AA <- readAAStringSet("nifH_analysis/nifH_prot_aligned.fasta")
+
+Valid_seq <- grepl( paste(c("^[", paste(AA_ALPHABET[1:26], collapse = ","),",\\.,-]+$"), collapse  = ""), nifh_AA, ignore.case = TRUE)
+
+#number of invalid AA seqeunces
+length(nifh_AA) - sum(Valid_seq)
+
+#excluding invalid sequences
+nifh_AA_valid <- nifh_AA[Valid_seq]
+
+writeXStringSet(nifh_AA_valid, file="nifH_analysis/nifH_prot_aligned.fasta", format="fasta")
+
+```
+
++ with the clean protein alignment we now build our hmmprofile
+
+```{r, engine = "bash", eval = F}
+/Applications/hmmer/binaries/hmmbuild nifH_analysis/nifh_hmm nifH_analysis/nifH_prot_aligned.fasta
+
+```
+
++ With that profile we check for frameshift errors in the representative sequences 
+
+Files: 
+
++ `otus_nifh.fa`
++ `nifH_hmm`
+
+this script does: 
+
++ cleaning coding sequences using hmmframe
++ output - removes insertions, denoted by 'i' from hmmframe output
+
+```{r, eval = FALSE, eval = FALSE}
+
+#function for editing out 'i' in sequences
+seq.clean<-function(seq) {
+
+	attrs<-attributes(seq)
+	seq<-seq[grep('i',seq,invert=TRUE)]
+	attributes(seq)<-attrs
+	return(seq)
+}
+
+trans.count<-function(seqs) {
+
+	if(length(grep('[\\*X]',translate(seqs))) > 0) {
+		return(grep('[\\*X]',translate(seqs)))
+	}else {
+		return(0)
+	}
+}
+
+#give fasta input file 
+input.file<-'nifH_analysis/otus_nifh.fa'
+
+#list HMM file
+hmm.file<-'nifH_analysis/nifH_hmm'
+
+#full path to hmmframe (as $PATH is ignored if called from GUI)
+hmmframe <- c("/Applications/HMM-FRAME/hmmframe")
+
+#set number of cores to use - best to set to number of cores #actually in the computer.
+n.core<-3
+
+#################################################
+#HMMFRAME processing
+#################################################
+#splitting file into multiple parts to run HMMFRAME on different cores
+
+seqs<-read.fasta(input.file,forceDNAtolower=FALSE,strip.desc=TRUE)
+
+z<-rep(1:n.core,length.out=length(seqs))
+test<-split(seqs,z)
+
+#temp directory for split files
+system(paste('mkdir ',getwd(),'/nifH_analysis/TMP_hmmframeR',sep=''))
+
+
+for(i in 1:length(test)) {
+
+	write.fasta(test[[i]], names=lapply(test[[i]],function(x) {attr(x,'Annot')}),
+				file.out=paste(getwd(),'/nifH_analysis/TMP_hmmframeR/hmmin_',i,'.fa',sep=''),nbchar=1000)
+
+}
+
+#starts n.core HMMFRAME for each split file in TMP_hmmframeR directory.
+mclapply(list.files(paste(getwd(),'/nifH_analysis/TMP_hmmframeR/',sep='')),
+         function(x) {system(paste(hmmframe, hmm.file,' ',
+                                   paste(getwd(),'/nifH_analysis/TMP_hmmframeR/',x,sep=''),' ',
+                                   paste(getwd(),'/nifH_analysis/TMP_hmmframeR/OUT_',x,sep=''),
+                                   ' 0'))},mc.cores=n.core)
+
+#concatenate split HMMFRAME output files to temp file
+system(paste('cat ',getwd(),'/nifH_analysis/TMP_hmmframeR/OUT* > ',getwd(),'/nifH_analysis/Temp.fa',sep=''))
+
+```
+
+```{r}
+#function for counting the number of frameshifts in output
+Attr_to_DF <- function(x) {
+  
+  L <- strsplit(x, " ")[[1]]
+  Values <- c(L[1], lapply(L[-1], function(x) strsplit(x,"=")[[1]][2] ))
+  names(Values) <- c("seq.nam", lapply(L[-1], function(x) strsplit(x,"=")[[1]][1] ))
+  return(Values)
+  
+}
+
+#read in concatenated sequence file
+seqs.hmmout <- read.fasta(paste(getwd(),'/nifH_analysis/Temp.fa',sep=''),forceDNAtolower=FALSE,strip.desc=TRUE)
+
+Attr_list <- lapply( lapply(seqs.hmmout, function(x) attr(x, "Annot")), Attr_to_DF)
+Attr_DF <- do.call(rbind, lapply(Attr_list, data.frame, stringsAsFactors=FALSE))
+seq_with_FS <- Attr_DF[which(Attr_DF$error_num > 0), ]$seq.nam
+
+Attr_DF[Attr_DF$seq.nam %in% seq_with_FS,] %>% 
+  select(-hmm_name) %>% 
+  kable(row.names = FALSE, align = 'c')
+
+```
+
+
+There are only few reads with frameshifts and those reads are from OTUs that have only few sequences in it. 
+But if the corrected sequences are valid we can keep them. 
+
+I check whether the corrected sequences have stop codons in the first reading frame
+
+
+```{r}
+lapply(seqs.hmmout[which(Attr_DF$error_num > 0)], function(x) seqinr::translate(x))
+```
+
+The Sequences look fine and also quite similar. I keep them. Also, they have no lower case `i`'s so no need to clean them. 
+
+
+```{r}
+
+lengths<-unlist(lapply(seqs.hmmout,getLength))
+
+seqL <- lengths %>% 
+  data.frame(length = .) %>% 
+  rownames_to_column(var = "names")
+  
+ggplot(seqL, aes(x = length))+
+  geom_histogram(binwidth = 1)
+
+ggplot(seqL, aes(x = length))+
+  geom_histogram(binwidth = 1)+
+  scale_x_continuous(limits=quantile(seqL$length, c(0.005, 0.995)) + c(-1,1),
+                     breaks = seq(0,600,3))+
+  labs(title = '0.05% - 99.5% quantile of sequence length\'s')
+```
+
+The vast majority of the sequences comes in 3 length: 387, 390 & 393 nucleotides. This is in good agreement with the expected length. 
+
+We keep all sequences >= 384 nt & <= 396 nt. 
+
+```{r}
+Seq_exclude <-  seqL[seqL$length < 384 | seqL$length > 396,]$names 
+seq_clean <- seqs.hmmout[! names(seqs.hmmout) %in% Seq_exclude]
+
+#writes sequences that do not have frameshifts to fasta file
+write.fasta(seq_clean,names=names(seq_clean),
+            file.out= "nifH_analysis/otus_nifh_fsc.fa",
+            open='w',nbchar=1000)
+
+
+```
+
+
+### mapping reads to OTUs
+
+We now map the original paired reads to the frame-shit corrected representative sequences
 
 + dropping singletons first
 
 ```{r, engine="bash", eval = FALSE}
 
-/Applications/vsearch/bin/vsearch --sortbysize nifH_analysis/otus_nifh.fa \
+/Applications/vsearch/bin/vsearch --sortbysize nifH_analysis/otus_nifh_fsc.fa \
     --sizein \
     --minsize 2 \
     --output nifH_analysis/otus_final_nosingle.fa \
@@ -437,7 +624,7 @@ The reference chimera detection flags the most abundant OTU, OTU_1 as chimeric. 
 
 + mapping reads
 
-```{r, engine = "bash"}
+```{r, engine = "bash", eval = FALSE}
 /Applications/vsearch/bin/vsearch --usearch_global nifH_analysis/complete_set.fasta \
     --db nifH_analysis/otus_final_nosingle.fa \
     --id 0.97 \
@@ -447,5 +634,321 @@ The reference chimera detection flags the most abundant OTU, OTU_1 as chimeric. 
     --strand both \
     --log cluster.log \
     --maxrejects 64 \
-    --uc 16S_analysis/otu_table_nifh.uc
+    --uc nifH_analysis/otu_table_nifh.uc
 ```
+
++ converting uc file into OTU table , removing size annotation from OTU names & and saving it as tab delimited text file
+
+```{r}
+OTU_nif <- import_usearch_uc('nifH_analysis/otu_table_nifh.uc')
+
+colnames(OTU_nif) <- gsub("(OTU_\\d+);.+", "\\1", colnames(OTU_nif))
+
+write.table(OTU_nif, "OTU_nifh.txt", sep = "\t")
+
+dim(OTU_nif)
+```
+
++ percentage of reads mapped to OTU's
+
+```{r}
+merged_reads <- system("grep -c '^>' nifH_analysis/complete_set.fasta", intern = TRUE)
+
+sum(OTU_nif) / as.numeric(merged_reads) * 100
+````
+
+
+## Alignment and Tree building
+
+To build a phylogenetic tree of the centroid OTU sequences, we take the align them together with the sequences in the nifh ARB database. 
+
+in ARB
++ we select the `tree_RepSeq_nifHPCRregion_AA_April2014_CDHITAA` tree. It's the most comprehensive tree in the database (6212 sequences). 
++ we export the sequences in the tree as unaligned nucleotide fasta file (`ref_dna.fasta`)
++ we merge the OTU file to the file with reference sequences
+
+```{r, engine='bash'}
+
+cat nifH_analysis/otus_final_nosingle.fa nifH_analysis/ref_dna.fasta > nifH_analysis/nifH_all_dna.fasta
+
+grep -c '^>' nifH_analysis/nifH_all_dna.fasta
+
+```
+
++ we use a custom script to align the reverse translation of the nucleotide file 
+
+> Script for aligning nucleotide sequences using a seed amino acid alignment and HMMER. Besides the output nucleotide alignment FASTA file, this script spits out a FASTA format file with the aligned amino acids, prot_aligned.fasta, as well as two error log files that show which sequences were removed due to no matching domains at the set e-value threshold.
+
++ the script needs a reference protein alignment as input. We use the same than the one we prepared for the frameshift analysis earlier (cleaned protein alignment containing all sequences in the arb database)
+
+### aligning
+
+**the scrip can't be called from within Rmarkdown - I run it in the shell with the command below**
+
+```{r, engine = "bash", eval = FALSE}
+
+python hmmalign_nucmap.py -f nifH_all_dna.fasta \
+                          -s nifH_prot_aligned.fasta \
+                          -o nifh_all_dna_aligned.fasta \
+                          -e 0.00001  
+                 
+```
+
++ both error files are empty which means that no sequences were removed
+
+```{r, engine = 'bash', eval=FALSE}
+ls -lh nifH_analysis/error*
+```
+```{r, engine = 'bash', eval = FALSE}
+rm nifH_analysis/error*
+```
+
+
+### masking alignment
+
+
+mask alignment by
+
++ masking columns with > 95% gaps 
+
+```{r}
+
+seqs <- readAAStringSet("nifh_all_prot_aligned.fasta")
+
+# rename seqeunces
+## strip size annotation after OTU name
+## strip <unknown description> from reference seqeunce names
+
+names(seqs) <- gsub('(OTU_\\d+);.+', '\\1', names(seqs))
+names(seqs) <- gsub('\\s<unknown description>', '', names(seqs))
+
+
+# mask all columns with > 95% gaps characters across all sequences
+masked <- maskGaps(AAMultipleAlignment(seqs), min.fraction = 0.95, min.block.width = 1)
+
+# backtransform to AAStringset and write the alignment as fasta
+seq_masked <- as(masked, "AAStringSet")
+
+writeXStringSet(seq_masked, file= "nifh_all_prot_aligned_masked.fasta")
+```
+
+### check for outliers
+
+```{r, message=FALSE}
+
+Dist <- DistanceMatrix(seq_masked, verbose = FALSE)
+
+hist(Dist)
+
+plot(sort(colSums(Dist), decreasing = T), ylab = "colSums(Dist)", 
+     main = "Sum of Distances for all Sequences", 
+     xlab = "Sequences (first 100, decreasing order of total distance)") 
+
+sort(colSums(Dist), decreasing = T)[1:3]
+
+```
+
+### construct tree
+
+```{r, engine = "bash", eval = FALSE}
+/Applications/FastTree/FastTree nifh_all_prot_aligned_masked.fasta > FastTree_nifh.tre
+```
+
+### uncurated phylogenetic tree
+
+branches that lead to OTU's are in blue, branches that lead to reference sequences are in yellow
+
+```{r, fig.height= 30, fig.width=8}
+
+TREE <- read.tree("FastTree_nifh.tre")
+
+TREE_plot <- groupOTU(TREE, TREE$tip.label[grep('OTU', TREE$tip.label )], group_name = "group") 
+
+ggtree(TREE_plot, aes(color=group))+
+  scale_color_manual(values = c("orange", "darkblue"))
+
+
+```
+
+### assiging of metadata for the reference sequences
+
++ We exported the metadata for the sequences that we also used for building the tree from ARB
+
+```{r}
+Ref_meta <- read_tsv("nifH_analysis/ref_spec_meta.txt", 
+                     col_names = c("names",
+                                   "Raymond_group",
+                                   "Young_group",
+                                   "full_name",
+                                   "AMINO_2014",
+                                   "DNA_2003",
+                                   "isolation_source",
+                                   "nuc_length",
+                                   "PutativeChimera"))
+
+
+kable(head(Ref_meta))
+
+```
+
+from the [ARB_nif_documentation](http://wwwzehr.pmc.ucsc.edu/nifH_Database_Public/) we can read that:
+
+> Raymond_group- Major cluster designation  (1-5) as defined by Raymond et al. Clusters 1-3 annotated.
+> Young_group- Major cluster designations (B, A, C) as used by Young.
+> (**here** AMINO_2014) AMINO_2010- Current designation of clusters using the Alphabetical clustering system of Zehr
+et al. 2003. 
+> PuatativeChimera – Sequences identified as possible chimeras using UCHIME.
+
+### putative chimeras
+
++ we check where the putative chimeric sequences are in the tree and if we need to worry about them 
+
+```{r, fig.height= 30, fig.width=8}
+
+TREE_plot <-  groupOTU(TREE,
+                       Ref_meta[! is.na(Ref_meta$PutativeChimera),]$names,
+                       group_name = "pot.Chimera") 
+
+
+ggtree(TREE_plot)+
+  geom_tippoint(aes(color=pot.Chimera))+
+  scale_colour_manual(values = c(NA, 'red'))
+
+```
+
+The putative chimeric sequences do not form especially long branches and we probably don't need to worry about them. 
+
+## cluster annotation
+
++ red circles around nodes signify bootstrap support > 0.9
+
+```{r, fig.height= 6, fig.width=6}
+
+Ref_meta <- mutate(Ref_meta, Zehr_group = gsub("(\\d).+", "\\1", AMINO_2014))
+
+ggplot(Ref_meta, aes(x = Raymond_group, y = Young_group))+
+  geom_bin2d()
+
+ggplot(Ref_meta, aes(y = Zehr_group, x = Young_group))+
+  geom_bin2d()
+```
+
+
+```{r, fig.height= 30, fig.width=8}
+p <- ggtree(TREE_plot)
+
+pR <- p %<+% Ref_meta 
+
+pR + 
+  geom_tippoint(aes(color=Zehr_group), size = 1) + 
+  geom_nodepoint(colour = ifelse(TREE$node.label > 0.9, "red", NA), size = 0.3, shape = 21, fill = NA)+
+  theme(legend.position="right") +
+  scale_colour_manual(values = c(brewer.pal(5,"Set1")))
+
+```
+
+
+According to the brought characterization of the Young group
+
+
+> The true NifH proteins can be divided into three types (Young, 1990; 2000). **Type B ("bacterial")** is the best represented and includes enzymes from the proteobacteria, cyanobacteria, and firmicutes
+
+
+> **Type C ("clostridial")** is found in the firmicute bacterium Clostridium, the green sulfur bacterium Chlorobium, and also in the archaeon Methanosarcina. 
+
+> **Type A** is associated with the "alternative" nitrogenases, which do not contain molybdenum, and is found in both archaea and proteobacteria.
+
+> A more distant and diverse group was designated **type D** (Young 1990), but it is now clear that these proteins are not part of nitrogenase enzymes as their genes are not associated with nifD or nifK, although some are adjacent to rather distant homologs of the nifDKEN family.
+
+
+** note that (probbaly because of missplacement of some sequences in our tree? ) the group 4 clade is not monophyletic. In particular there are some group 4 sequences that cluster within the group 2 cluster. Therefore I looked up two tip labels manually to find the node at the base of the larg group 4 cluster that we want to exclude**
+
+As summarized by Gaby and Buckley 2012: 
+
+
+> Phylogenetic analyses of nifH gene sequences have revealed five primary clusters of genes homologous to nifH [12–15]. **Cluster I** consists of aerobic nitrogen fixers including Proteobacteria, Cyanobacteria, Frankia, and Paenibacillus. **Cluster II** is generally thought of as the alternative nitrogenase cluster because it contains sequences from FeFe and FeV nitrogenases which differ from the conventional FeMo cofactor-containing nitrogenase. **Cluster III** consists of anaerobic nitrogen fixers from Bacteria and Archaea including for instance the Desulfovibrionaceae, Clostridia, Spirochataes, and Methanobacteria. **Cluster IV and cluster V** contain sequences that are paralogs of nifH and which are not involved in nitrogen fixation
+
+
+>  In addition, many of these primers will amplify genes that do not mediate nitrogen fixation, and thus it would be advisable for researchers to screen their sequencing results for the presence of non-target genes before analysis. 
+
+```{r, fig.height= 30, fig.width=8}
+# find base node
+
+G4 <- MRCA(TREE, c("PaeDur18","OTU_2602"))
+
+pR <- p %<+% Ref_meta 
+
+pR + 
+  geom_tippoint(aes(color=Zehr_group), size = 0.5) + 
+  geom_hilight(node = G4)+
+  theme(legend.position="right") +
+  scale_colour_manual(values = c(brewer.pal(5,"Set1")))
+```
+
+
++ Number of OTU's in this clade
+
+```{r}
+Descendents <- tips(TREE, G4)
+
+sum(grepl('OTU', Descendents))
+
+```
+
++ % of OTU's in this clade
+
+```{r}
+(sum(grepl('OTU', Descendents)) / ncol(OTU_nif)) * 100
+```
+
++ % of reads in this clade
+
+```{r}
+OTU_nif[, which(colnames(OTU_nif) %in% Descendents)] %>% 
+  colSums() %>% 
+  sum() / sum(OTU_nif) * 100
+```
+
+42% of all OTUs which account for 56% of all reads are in this clade and need to be removed. 
+
+Also note that many of the most abundant OTUs are among the excluded ones. 
+
+```{r}
+top100 <- sort(colSums(OTU_nif), decreasing = T)[1:100]
+
+top100[which(names(top100) %in% Descendents)] %T>% 
+  print %>% 
+  length
+
+```
+
+
+I checked for the most abundant sequence, OTU1 if it indeed is identified as non-nifh sequence. 
+
++ The full OTU_1 sequence is
+
+```{r, engine = "bash"}
+grep -A6 '^>OTU_1;' nifH_analysis/otus1_sorted.fa
+```
+
++ The best match on NCBI BLAST is a chloroplast... 
+
+> Vaucheria litorea chloroplast, complete genome	496	496	97%	2e-136	89%	EU912438.1
+
++ from THE PHYLOGENY AND EVOLUTION OF NITROGENASES J. P. W. YOUNG - chapter 14
+
+> Figure 1 shows a phylogeny based on NifH proteins in the completely sequenced nitrogen-fixers and their recognisable homologs in the same species. The first thing to note is that the true NifH sequences form a clearly defined clade, but there are also a large number of more distant relatives. Some of these are well-known proteins involved in the synthesis of photosynthetic pigments, namely protochlorophyllide reductase (either BchL or ChlL) and chlorin reductase (BchX).
+
++ how are the group 4 OTUs split among samples? 
+
+```{r}
+rowSums( OTU_nif[, which( colnames( OTU_nif) %in% Descendents)]) / 
+  rowSums(OTU_nif) * 100 -> Prct_C4
+
+
+hist(Prct_C4)
+
+
+```
+
+
