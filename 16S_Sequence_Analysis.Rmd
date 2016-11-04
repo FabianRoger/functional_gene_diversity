@@ -27,9 +27,11 @@ grep -c '^>' 16S_analysis/Christian_all1_150.fna
 
 The Sequenzes were amplified using the following primer:
 ```{r}
-data.frame(Name = c("Pro341", "Pro805R"),
-           Sequence=c( "CCTACGGGNBGCASCAG",  "GACTACNVGGGTATCTAATCC")) %>% 
-  kable()
+
+data.frame(`.` = c( "sequence","direction","length"),
+           Pro341 = c( "CCTACGGGNBGCASCAG", "foward", nchar("CCTACGGGNBGCASCAG")),
+           Pro805R = c( "GACTACNVGGGTATCTAATCC", "reverse", nchar("GACTACNVGGGTATCTAATCC"))) %>% 
+  kable(caption = "primer sequences")
 ```
 
 #### Primer filterring and trimming
@@ -150,6 +152,62 @@ ggplot(hist, aes(x = V1, y = V2))+
     + opened in arb, exported all bacteria & archea species as fasta (Silva_SSU.fasta) (unaligned)
     + 576554 sequences
     
+```{r}
+
+specLength <- fasta.seqlengths("16S_analysis/Silva_SSU.fasta")
+
+specLength %>%
+  as_data_frame() %>% 
+  ggplot(., aes(x = value))+
+  geom_histogram(binwidth = 100)+
+  scale_x_continuous(breaks = seq(0,6000, 200))+
+  labs(x = "length", title = "seqeuncing length distribution in reference db")
+
+```
+
+```{r, engine = "bash"}
+
+/Applications/bbmap/bbduk2.sh in=16S_analysis/Silva_SSU.fasta \
+      fliteral=CCTACGGGNBGCASCAG,GACTACNVGGGTATCTAATCC \
+			minkmerhits=2 \
+			k=17 \
+			copyundefined \
+			rcomp=t \
+			hammingdistance=1 \
+			outm=16S_analysis/Silva_with_Primer.fasta \
+      overwrite=true \
+			-Xmx6g
+
+
+/Applications/bbmap/bbduk2.sh in=16S_analysis/Silva_with_Primer.fasta \
+			lliteral=CCTACGGGNBGCASCAG \
+      rliteral=GACTACNVGGGTATCTAATCC \
+			k=17 \
+			copyundefined \
+			rcomp=t \
+			hammingdistance=1 \
+			out=16S_analysis/Silva_SSU_trimmed.fasta \
+      overwrite=true \
+			-Xmx6g
+			
+rm 16S_analysis/Silva_with_Primer.fasta
+```
+
+```{r}
+
+specLength <- fasta.seqlengths("16S_analysis/Silva_SSU_trimmed.fasta")
+
+specLength %>%
+  as_data_frame() %>% 
+  ggplot(., aes(x = value))+
+  geom_histogram()+
+  scale_x_continuous(breaks = seq(350,450, 4), limits=c(360, 450))+
+  labs(x = "length", title = "seqeuncing length distribution in reference db\ncut with primers")+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+    
 ```{r, engine="bash"}
 /Applications/vsearch/bin/vsearch --uchime_ref 16S_analysis/otus1_denonvo.fa \
     --db 16S_analysis/Silva_SSU.fasta \
@@ -230,75 +288,3 @@ colSums(OTU) %>%
 
 ```
 
-### compare raw OTU table with OTU table from previous analyis
-
-```{r}
-
-OTU_old <- read.table("~/Documents/01_PhD/01_Research/07_habitat_diveristy/otutable.txt", header = T)
-OTU_old <- select(OTU_old, -OTU_ID)
-```
-
-+ compare number of reads in each sample
-
-```{r}
-Reads.comp <- 
-  data.frame(new = rowSums(OTU)) %>% 
-  rownames_to_column(var = "samples") %>% 
-  left_join(., rownames_to_column(data.frame(old = colSums(OTU_old)), var = "samples"))
-
-ggplot(Reads.comp, aes(x = old, y = new))+
-  geom_point()+
-  stat_smooth(method = "lm", se = F)+
-  labs(title = "number of reads per sample")
-```
-
-+ compare OTU richness in each sample (not rarefied)
-```{r}
-
-Div.comp <- 
-  data.frame(new = specnumber(OTU)) %>% 
-  rownames_to_column(var = "samples") %>% 
-  left_join(., rownames_to_column(data.frame(old = specnumber(t(OTU_old))), var = "samples"))
-
-
-ggplot(Div.comp, aes(x = old, y = new))+
-  geom_point()+
-  stat_smooth(method = "lm", se = F)+
-  labs(title = "number of OTUs per sample")
-
-```
-
-
-+ compare OTU effective number of species in each sample (not rarefied)
-```{r}
-
-Div.comp <- 
-  data.frame(new = specnumber(OTU)) %>% 
-  rownames_to_column(var = "samples") %>% 
-  left_join(., rownames_to_column(data.frame(old = specnumber(t(OTU_old))), var = "samples"))
-
-
-ggplot(Div.comp, aes(x = old, y = new))+
-  geom_point()+
-  stat_smooth(method = "lm", se = F)+
-  labs(title = "number of OTUs per sample")
-
-```
-
-```{r, warnings = F}
-MC_old <- MetaCommunity(OTU_old[, -1])
-MC <- MetaCommunity(t(OTU))
-
-
-Eff.comp <- 
-  data.frame(new = AlphaDiversity(MC, q = 1, Correction = "None")$Communities) %>% 
-  rownames_to_column(var = "samples") %>% 
-  left_join(., rownames_to_column(data.frame(old = AlphaDiversity(MC_old, q = 1, Correction = "None")$Communities), var = "samples"))
-
-ggplot(Eff.comp, aes(x = old, y = new))+
-  geom_point()+
-  stat_smooth(method = "lm", se = F)+
-  labs(title = "Effective number os species per sample")
-
-```
-?AlphaDiversity
