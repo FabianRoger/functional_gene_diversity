@@ -1,0 +1,484 @@
+---
+title: "Data_analysis_nifH"
+output:
+  html_notebook:
+    toc: yes
+    toc_depth: 3
+  html_document: null
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, tidy = TRUE, highlight = TRUE)
+```
+
+```{r, echo = F, message=FALSE}
+library(knitr)
+library(tidyverse)
+#library(lme4)
+library(broom)
+
+
+
+#library(phyloseq)
+#library(GGally)
+#library(parallel)
+```
+
+# experimental design:
+
+![experimental set-up](Experimental_layout.jpg)
+
+In the experimental design, each diversity treatments consist of a meta-community ("big core") of four separate sediment communities ("small core") that correspond to the habitats.
+
+For habitat level 1, each **metacommunity** is replicated 4 times for each habitat (resulting in 16 meta-communities in total)
+
+habitat level 2 to 4, consist of four replicated meta-communities each, and each meta-community contains 2x2 [level 2], (2x1 + 1x2) [level 3] and 4x1 [level 4] habitat communities ("small cores"), respectively. 
+
+There are two missing samples
+
++ Level 3 - replicate A - habitat cayno
++ Level 3 - replicate D - habitat silt
+
+
+# import and clean metadata and functional data
+
+```{r, message = FALSE}
+meta <- read_tsv("metadata.txt")
+
+N_func <- read_tsv("summer_habdiv_n2fix_deni_new.txt")
+qPCR <- read_tsv("qPCR.txt")
+Par_frct <- read.table("Fraction_Parallogues_nifh.txt", sep ="\t", header = T)
+Chl_frct <- read.table("frct_Chl.txt")
+
+
+
+FuncDat <- meta %>% 
+  filter(season == "summer") %>% 
+  select(-season) %>% 
+  mutate(habitat = ifelse(Level == 1, sediment, "mix")) %>% 
+  select(-habitat) %>% 
+  left_join(N_func) %>% 
+  left_join(qPCR) %>% 
+  left_join(Par_frct) %>% 
+  left_join(Chl_frct) %>% 
+  arrange(Level, replicate, sediment)
+
+kable(head(FuncDat))
+```
+
+both, the 16S and the nifH primer picked up more then the target genes.
+
++ The nifh primers picked up a sizable fraction (`r paste(paste(round(min(FuncDat$frct.par, na.rm = T)*100),  round(max(FuncDat$frct.par, na.rm = T)*100), sep = " - "), "%")`) of nifh - parallogues, i.e. close relatives to nifh sequences that are not involved in nitrogen fixation. 
+
++ The 16S primers picked up chloroplast sequences (`r paste(paste(round(min(FuncDat$frct_Chl, na.rm = T)),  round(max(FuncDat$frct_Chl, na.rm = T)), sep = " - "), "%")`)
+
+As we used the same primers in the qPCR assays, we need to account for that. We therefore correct each sample for the % of non-target sequences is in differnt runs. This correction is of casue not perfect as we don't know the variabilty of the % of target sequences picked up in different runs, as the qPCR conditions varied slightly from the pcr conditions for library preparation and of casue as the seqeunce count from amplicon seqeuncing is only roughly quantitative
+
+```{r}
+
+FuncDat <- FuncDat %>% 
+  mutate(nifH = nifH * (1 - frct.par)) %>% 
+  mutate(`16S` = `16S` * ((100 - frct_Chl) / 100))
+
+```
+
+
+
+# Hypothesis 1
+
+**Habitat diversity leads to increased bacterial diversity and to increased functional guild diversity (i.e. both more bacterial species in general but also a greater diversity of species carrying the genes for nitrogen fixation and denitrification respectively)**
+
+To test this hypthesis I break it down into two question:
+
+## Hypothesis 1 a)
+
+**does functional gene diveristy increase with overall bacterial diversity?**
+
+We can test this hypothesis using the alpha diveristy measurements in the *small* cores, with all 50 datapoints. However, the measurments taken from small cores that came from the same *big* core are not independent and we need to account for that. Also, we measured *three* functional genes. Because the absolute values of the functional gene diversities are not (necessarily) comparable, we test each response variable seperately. 
+
+The (3) model tests the following hypothesis
+
++ does functional gene diveristy change habitat (is the mean diveristy different between the habitats)
++ is functional gene diversity correlated with bacterial diversity (overall effect)
++ is the relationship between bacterial diversity and functional gene diveristy dependent on the habitat (significant interaction effect)
+
+
+### import & reshape diveristy data
+
+note that I calculated three diveristy metrics, *richness*, *effective number of species* and *effective number of phylogenetic equidistinct species*. Richness is a hard to estimate and therefore unreliable diversity metric and the ecological relevance of richness can be debated. Therefore I report it but exclude it from the data analysis. Effective number of species and phylogenetic diversity tend to be well correlated (see Diveristy estimation), wherefore it is unlikely to yield very differnt results. Effective number of *species* (otus) is easier to interpret (number of species in an equally diverse but completeley even community) the the phylogenetic diveristy (number of unique "phylotypes", i.e. number of species in an equally phylodiverse community where all species have the same abundance and are equally unrelated to each other). To minimize the overall number of linear models, we present phylogentic diveristy but only use the effective number of species in the data analysis. 
+
+
+
+```{r}
+DIV <- read.table("Diversity_estimations.txt")
+
+DIVeffN <- DIV %>%
+  select(-contains("S_")) %>% 
+  select(-contains("y_")) %>% 
+  select(-contains("phylo")) %>% 
+  gather(func_gen, func_div, matches("_nifh|_nosz1|_nosz2")) %>% 
+  na.omit() %>% 
+  left_join(meta)
+  
+
+kable(head(DIVeffN))
+```
+
+note that the datastructure could imply non-independence of the small cores that are grouped within each big core. To account for this we first test if there is a main effect of *big cores* 
+
+```{r}
+DIVeffN %>% 
+  filter(Level > 1) %>%
+  lm(func_div ~ func_gen * MC.ID, data=.) %>% 
+  anova()
+```
+
+This should give us the [type I sum of squares](http://goanna.cs.rmit.edu.au/~fscholer/anova.php) and hence whether the big cores (MC.ID) have a significant effect *after* accounting for functional gene. I conclude that as neither the main effect nor the interaction is remotely significant we don't need to worry about non-independence and can safely pool the data. 
+
+
+As the absolute diveristy values of three functional genes ar not necessarily comparable, we model them seperately (which also allows us to transform the data separately as appropriate)
+
+### nifH
+
+
+
+
+
+```{r, fig.width = 12, fig.height = 10}
+mod_nifh <- lm(func_div ~  effN_bac * sediment, data = filter(DIVeffN, func_gen == "effN_nifh")) 
+
+par(mfrow=c(3,3))
+plot(mod_nifh)
+hist(resid(mod_nifh))
+
+shapiro.test(residuals(mod_nifh))
+
+```
+
+The diagnostic plots look fine, we proceed to look at the model
+
+```{r}
+
+anova(mod_nifh)
+
+mod_nifh %>% tidy %>% kable
+
+mod_nifh %>% glance %>% kable
+
+PRED <- 
+  data.frame(y = predict(mod_nifh)) %>% 
+  mutate(x = as.vector(DIVeffN[DIVeffN$func_gen == "effN_nifh", ]$effN_bac)) %>% 
+  mutate(sediment = as.vector(DIVeffN[DIVeffN$func_gen == "effN_nifh", ]$sediment))
+
+DIVeffN %>% 
+  filter(func_gen == "effN_nifh") %>% 
+  ggplot(aes(x = effN_bac, y = func_div, colour = sediment) )+
+  geom_point()+
+  geom_line(data = PRED, aes(x = x, y = y))+
+  #geom_smooth(method = "lm")+
+  theme_bw()+
+  labs(x = "effective number of bacterial otus", y = "effective number of nifH otus", title="nifH")+
+  theme(legend.position = "bottom")+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
+```
+
++ the main effect of 'sediment' is highly significant. The mean diversity changes with sediment wiht silt having the highest mean diversity and sand the lowest. 
++ the main effect of bacterial diveristy is significant, too.  
+
+
+### nosZ I
+
+```{r, fig.width = 12, fig.height = 10}
+mod_nosz1 <- lm(func_div ~  effN_bac * sediment, data = filter(DIVeffN, func_gen == "effN_nosz1")) 
+
+par(mfrow=c(3,3))
+plot(mod_nosz1)
+hist(resid(mod_nosz1))
+
+shapiro.test(residuals(mod_nosz1))
+
+```
+
+The diagnostic plots don't look great and the Shapiro-Wilk Normality test suggests a string deviation form normality fo rthe residual distribution. 
+
+I try to log-transform the nosZ1 data 
+
+
+```{r, fig.width = 12, fig.height = 10}
+mod_nosz1_log <- lm(log(func_div, base = 10) ~  effN_bac * sediment, data = filter(DIVeffN, func_gen == "effN_nosz1")) 
+
+par(mfrow=c(3,3))
+plot(mod_nosz1_log)
+hist(resid(mod_nosz1_log))
+
+shapiro.test(residuals(mod_nosz1_log))
+```
+
+
+The plots don't looks okay now and the residuals distribution looks more normal now (as is also confirmed by the Shapiro-Wilk Normality test). 
+
+
+```{r}
+anova(mod_nosz1_log)
+
+mod_nosz1_log %>% tidy %>%  mutate(estimate = 10^estimate) %>% kable
+
+mod_nosz1_log %>% glance %>% kable
+
+PRED <- 
+  data.frame(y = predict(mod_nosz1_log)) %>% 
+  mutate(y = 10 ^ y) %>% 
+  mutate(x = as.vector(DIVeffN[DIVeffN$func_gen == "effN_nosz1", ]$effN_bac)) %>% 
+  mutate(sediment = as.vector(DIVeffN[DIVeffN$func_gen == "effN_nifh", ]$sediment))
+
+DIVeffN %>% 
+  filter(func_gen == "effN_nosz1") %>% 
+  ggplot(aes(x = effN_bac, y = func_div, colour = sediment) )+
+  geom_point()+
+  geom_line(data = PRED, aes(x = x, y = y))+
+  theme_bw()+
+  labs(x = "effective number of bacterial otus", y = "effective number of nosZ I otus", title="nosZ I")+
+  theme(legend.position = "bottom")+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
+
+
+```
+
++ mean diversity of nosz I otus chneges with sediment, agian with highest diversity in silt and lowest diversity in sand and ruppia
++ there is no correlation between the effective number of noszI otus and the effective number of total bacterial otus
+
+
+### nosZ II
+
+```{r, fig.width = 12, fig.height = 10}
+mod_nosz2 <- lm(func_div ~  effN_bac * sediment, data = filter(DIVeffN, func_gen == "effN_nosz2")) 
+
+par(mfrow=c(3,3))
+plot(mod_nosz2)
+hist(resid(mod_nosz2))
+
+shapiro.test(residuals(mod_nosz2))
+
+```
+
+The diagnostic plots look fine
+
+```{r, fig.width = 12, fig.height = 10}
+mod_nosz2_sq <- lm(func_div^2 ~  effN_bac, data = filter(DIVeffN, func_gen == "effN_nosz2")) 
+
+par(mfrow=c(3,3))
+plot(mod_nosz2_sq)
+hist(resid(mod_nosz2_sq))
+
+shapiro.test(residuals(mod_nosz2_sq))
+```
+
+
+The plots look much better
+
+
+```{r}
+
+anova(mod_nosz2)
+
+mod_nosz2 %>% tidy %>%  kable
+
+mod_nosz2 %>% glance %>% kable
+
+PRED <- 
+  data.frame(y = predict(mod_nosz2)) %>% 
+  mutate(x = as.vector(DIVeffN[DIVeffN$func_gen == "effN_nosz2", ]$effN_bac)) %>% 
+  mutate(sediment = as.vector(DIVeffN[DIVeffN$func_gen == "effN_nosz2", ]$sediment))
+
+DIVeffN %>% 
+  filter(func_gen == "effN_nosz2") %>% 
+  ggplot(aes(x = effN_bac, y = func_div, colour = sediment) )+
+  geom_point()+
+  geom_line(data = PRED, aes(x = x, y = y))+
+  theme_bw()+
+  labs(x = "effective number of bacterial otus", y = "effective number of nosZ II otus", title="nosZ II")+
+  theme(legend.position = "bottom")+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
+
+
+```
+
++ there is a siginificant positive relationship between the effective number of nosZ II otus and the overall bacterial diversity. 
+
++ there is no difference in mean diversity of nosz II otus between sediments
+
++ the relationship between bacterial diversity and nosz II otu diversity depends on the sediment. It is strongest in sediments cyano and sand and flat in ruppia silt. 
+
++ the relationship between bacterial diversity and nosz II diversity depends on the sediment
+
+
+## Hypothesis 1 b)
+
+**Does habitat diversity leads to increased bacterial gamma diversity and to increased functional guild gamma diversity**
+
+*gamma diversity* has been calculated on the level of the large cores, comprising 4 differnet small cores with 1 - 4 different habitats. Note that for level 1 alpha and gamma diveristy are the same (only 1 pooled sample was taken for each identical habitat). For level 3, the habitats were weighted by there abundance (i.e. the habitat that was present twice was weighted double)
+
++ We take habitat as categorial variable
++ We exclude two level 3 cores with missing samples
++ We test each functional gene seperately
++ We use effective number of species as diversity metric
+
+
+### reshape diveristy data
+
+
+```{r}
+
+DIVeffN_y <- DIV %>%
+  select( Level, MC.ID, contains("y_")) %>% 
+  select( - matches("_S_|_phylo")) %>% 
+  distinct(.keep_all = TRUE) %>% 
+  gather(func_gen, y_func_div, matches("_nifh|_nosz1|_nosz2")) %>% 
+  na.omit() 
+  
+
+kable(head(DIVeffN_y))
+```
+
+### nifH
+
+```{r, fig.width = 12, fig.height = 10}
+
+mod_nifh_y <- lm(y_func_div ~  y_effN_bac + Level, data = filter(DIVeffN_y, func_gen == "y_effN_nifh")) 
+
+par(mfrow=c(3,3))
+plot(mod_nifh_y)
+hist(resid(mod_nifh_y))
+
+shapiro.test(residuals(mod_nifh_y))
+
+```
+
+The diagnostic plots look fine
+
+```{r}
+
+anova(mod_nifh_y)
+
+mod_nifh_y %>% tidy %>%  kable
+
+mod_nifh_y %>% glance %>% kable
+
+PRED <- 
+  data.frame(y = predict(mod_nifh_y)) %>% 
+  mutate(x = as.vector(DIVeffN_y[DIVeffN_y$func_gen == "y_effN_nifh", ]$y_effN_bac)) %>% 
+  mutate(Level = as.vector(DIVeffN_y[DIVeffN_y$func_gen == "y_effN_nifh", ]$Level))
+
+DIVeffN_y %>% 
+  filter(func_gen == "y_effN_nifh") %>% 
+  ggplot(aes(x = y_effN_bac, y = y_func_div, colour = as.factor(Level)))+
+  geom_point()+
+  geom_line(data = PRED, aes(x = x, y = y))+
+  theme_bw()+
+  labs(x = "bacterial gamma diversity", y = "nifH gamma diveristy", title="nifH")+
+  theme(legend.position = "bottom")
+
+
+```
+
+
+### nosZ I
+
+```{r, fig.width = 12, fig.height = 10}
+
+mod_nosz1_y <- lm(y_func_div ~  y_effN_bac + Level, data = filter(DIVeffN_y, func_gen == "y_effN_nosz1")) 
+
+par(mfrow=c(3,3))
+plot(mod_nosz1_y)
+hist(resid(mod_nosz1_y))
+
+shapiro.test(residuals(mod_nosz1_y))
+
+```
+
+The residuals deviate significantly from a normal distribution and are right skewed. We log transform teh response variable
+
+
+```{r, fig.width = 12, fig.height = 10}
+
+mod_nosz1_y_log <- lm(log(y_func_div, 10) ~  y_effN_bac + Level, data = filter(DIVeffN_y, func_gen == "y_effN_nosz1")) 
+
+par(mfrow=c(3,3))
+plot(mod_nosz1_y_log)
+hist(resid(mod_nosz1_y_log))
+
+shapiro.test(residuals(mod_nosz1_y_log))
+
+```
+
+It looks not great but better
+
+
+```{r}
+
+anova(mod_nosz1_y_log)
+
+mod_nosz1_y_log %>% tidy %>%  mutate(estimate = 10^estimate) %>%  kable
+
+mod_nosz1_y_log %>% glance %>% kable
+
+PRED <- 
+  data.frame(y = predict(mod_nosz1_y_log)) %>% 
+  mutate(y = 10^y) %>% 
+  mutate(x = as.vector(DIVeffN_y[DIVeffN_y$func_gen == "y_effN_nosz1", ]$y_effN_bac)) %>% 
+  mutate(Level = as.vector(DIVeffN_y[DIVeffN_y$func_gen == "y_effN_nosz1", ]$Level))
+
+DIVeffN_y %>% 
+  filter(func_gen == "y_effN_nosz1") %>% 
+  ggplot(aes(x = y_effN_bac, y = y_func_div, colour = as.factor(Level)))+
+  geom_point()+
+  geom_line(data = PRED, aes(x = x, y = y))+
+  theme_bw()+
+  labs(x = "bacterial gamma diversity", y = "nosZ I gamma diveristy", title="nosz I")+
+  theme(legend.position = "bottom")
+
+
+```
+
+
+### nosZ II
+
+```{r, fig.width = 12, fig.height = 10}
+
+mod_nosz2_y <- lm(y_func_div ~  y_effN_bac + Level, data = filter(DIVeffN_y, func_gen == "y_effN_nosz2")) 
+
+par(mfrow=c(3,3))
+plot(mod_nosz2_y)
+hist(resid(mod_nosz2_y))
+
+shapiro.test(residuals(mod_nosz2_y))
+
+```
+
+The diagnostic plots look fine
+
+
+```{r}
+
+anova(mod_nosz2_y)
+
+mod_nosz2_y %>% tidy %>%  kable
+
+mod_nosz2_y %>% glance %>% kable
+
+PRED <- 
+  data.frame(y = predict(mod_nosz2_y)) %>% 
+  mutate(x = as.vector(DIVeffN_y[DIVeffN_y$func_gen == "y_effN_nosz2", ]$y_effN_bac)) %>% 
+  mutate(Level = as.vector(DIVeffN_y[DIVeffN_y$func_gen == "y_effN_nosz2", ]$Level))
+
+DIVeffN_y %>% 
+  filter(func_gen == "y_effN_nosz2") %>% 
+  ggplot(aes(x = y_effN_bac, y = y_func_div, colour = as.factor(Level)))+
+  geom_point()+
+  geom_line(data = PRED, aes(x = x, y = y))+
+  theme_bw()+
+  labs(x = "bacterial gamma diversity", y = "nosZ I gamma diveristy", title="nosz I")+
+  theme(legend.position = "bottom")
+
+
+```
