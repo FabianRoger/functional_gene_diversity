@@ -1,0 +1,776 @@
+---
+title: "Diversity estimates"
+output:
+  html_document: default
+  toc: true
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, highlight = TRUE)
+```
+
+```{r, echo = F}
+library(knitr)
+library(tidyverse)
+library(entropart)
+library(ape)
+library(vegan)
+library(phyloseq)
+library(GGally)
+library(parallel)
+```
+
+# experimental design:
+
+![experimental set-up](Experimental_layout.jpg)
+
+In the experimental design, each diversity treatments consist of a meta-community ("big core") of four separate sediment communities ("small core") that correspond to the habitats.
+
+For habitat level 1, each **metacommunity** is replicated 4 times for each habitat (resulting in 16 meta-communities in total)
+
+habitat level 2 to 4, consist of four replicated meta-communities each, and each meta-community contains 2x2 [level 2], (2x1 + 1x2) [level 3] and 4x1 [level 4] habitat communities ("small cores"), respectively. 
+
+There are two missing samples
+
++ Level 3 - replicate A - habitat cayno
++ Level 3 - replicate D - habitat silt
+
+### import metadata 
+
+```{r, cache = TRUE}
+meta <- read_tsv("metadata.txt") %>% filter(season == "summer")
+
+kable(head(meta))
+```
+
+# calculating diveristy metrics
+
+# calculate the diversity of nifh genes
+
+Read in the relevant files:
+```{r, cache = TRUE}
+OTU_nifh <- read.table("OTU_nifh_clean.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+TREE_nifh <- read.tree("TREE_nifh_um_oT.tre")
+```
+
++ remove "F" preceding sample number in OTU table
+
+
+```{r, cache = TRUE}
+dimnames(OTU_nifh)[[1]] <- sub("F", "", dimnames(OTU_nifh)[[1]])
+```
+
+### sampling depth 
+
+The distribution of sampling depth among all pooled samples is:
+```{r, cache = TRUE}
+barplot(sort(rowSums(OTU_nifh), decreasing = TRUE), col = "white")
+```
+
+
+### sample completnes
+
+```{r, cache = TRUE}
+Rarecurves <- rarecurve(OTU_nifh, step = 20)
+
+RareDF <- lapply(Rarecurves, function(x) data.frame(S = unlist(x)))
+names(RareDF) <- row.names(OTU_nifh)
+
+RareDF <- do.call("rbind",RareDF )
+
+RareDF$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF)))
+RareDF$depth <- as.integer(gsub(".+N(\\d+)", "\\1", row.names(RareDF)))
+
+RareDF %>% 
+  left_join(meta) %>% 
+  ggplot(aes(x = depth, y = S, colour = sediment))+
+  facet_wrap(~Level * replicate, labeller = label_wrap_gen(multi_line=FALSE))+
+  geom_line() +
+  theme_bw()+
+  scale_color_manual(values = c("green", "darkgreen", "orange", "grey"))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+### richness and effective number of species
+
+```{r, cache = TRUE}
+
+MC <- MetaCommunity(t(OTU_nifh))
+
+### richness ###
+
+cl <- makeCluster(2)
+
+CommunityEntropies <- parApply(cl, MC$Nsi, 2, bcTsallis, q = 0, CheckArguments=FALSE, Correction = "ChaoWangJost")
+
+DIV_S_nifh <- data.frame(sample = as.numeric(names(CommunityEntropies)), 
+                       S_nifh = CommunityEntropies, 
+                       row.names=NULL, stringsAsFactors = F)
+
+
+#### effective number of species ###
+cl <- makeCluster(2)
+
+CommunityEntropies <- parApply(cl, MC$Nsi, 2, bcTsallis, q = 1, CheckArguments=FALSE, Correction = "Marcon")
+CommunityDiversity <- exp(CommunityEntropies)
+
+DIV_effN_nifh <- data.frame(sample = as.numeric(names(CommunityDiversity)), 
+                       effN_nifh = CommunityDiversity, 
+                       row.names=NULL, stringsAsFactors = F)
+
+```
+
+## calculating the phylogenetic diversity based on effective number of species 
+
+```{r, cache = TRUE}
+ppTree <- Preprocess.Tree(multi2di(TREE_nifh))
+
+
+cl <- makeCluster(4)
+
+CommunityEntropies_phylo <- parApply(cl, MC$Nsi, 2, bcPhyloEntropy, Tree = ppTree, q = 1, CheckArguments=FALSE, Correction = "Marcon")
+
+CommunityDiversity_phylo <- lapply( CommunityEntropies_phylo, function(x) exp(x$Total))
+CommunityDiversity_phylo <- unlist(CommunityDiversity_phylo)
+
+DIV_effN_phy_nifh <- data.frame(sample = as.numeric(names(CommunityDiversity_phylo)), 
+                           phyloDiv_nifh = CommunityDiversity_phylo, row.names=NULL)
+
+DIV_nifh <- 
+  left_join(DIV_S_nifh, DIV_effN_nifh) %>% 
+  left_join(DIV_effN_phy_nifh)
+  
+
+ggscatmat(DIV_nifh[,2:4])
+```
+
+
+## calculating gamma diversity
+
++ first we need to create a unique identifier for each *big core* (see schema of experimental design)
+
+```{r, cache = TRUE}
+meta$MC.ID <- paste(meta$Level, meta$replicate, sep="_")
+
+meta[meta$Level == 1, ]$MC.ID <- paste(meta[meta$Level == 1, ]$MC.ID, substr(meta[meta$Level == 1, ]$sediment, 1, 2), sep = "_")
+```
+
+### missing samples
+
+However, there are some missing samples (that have been lost or forgotten to sample)
+
+```{r, cache = TRUE}
+meta[ which( is.na( meta$sample)),]
+```
+
+we exclude the cores with the missing samples
+
+```{r, cache = TRUE}
+Missing <- meta[ which( is.na( meta$sample)),]$MC.ID
+
+meta_full <- meta[! meta$MC.ID %in% Missing, ]
+```
+
+
+### pooling the OTU data
+
+in this step we pool the samples from the complete small cores 
+
++ For the Level 1 cores we don't need calculate gamma diversity. We only have one pooled measurement per large core as we only have one sediment type in each level 1 core.
+
++ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogentic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
+
+```{r, cache = TRUE}
+
+
+y_DIV_nifh <- data.frame(MC.ID = unique(meta_full[meta_full$Level != 1, ]$MC.ID),
+                    y_S_nifh = NA,
+                    y_effN_nifh = NA,
+                    y_phyloDiv_nifh = NA)
+
+
+for(i in y_DIV_nifh$MC.ID) {
+  #extract OTU data from metacommunity i
+  OTU_temp <-  OTU_nifh[ which( rownames( OTU_nifh) %in% meta_full[ meta_full$MC.ID == i ,]$sample), ]
+  
+  #metacommunity object with weights
+  MC_temp <- MetaCommunity(t(OTU_temp), meta_full[meta_full$sample %in% as.numeric(rownames(OTU_temp)),]$weight)
+  
+  #calculate phylogenetic Alpha diveristy of order q = 1, with communities weighted by there relative proportion
+  y_DIV_nifh[y_DIV_nifh$MC.ID == i,]$y_S_nifh <- AlphaDiversity(MC_temp, q = 0, Correction = "ChaoWangJost")$Total
+  y_DIV_nifh[y_DIV_nifh$MC.ID == i,]$y_effN_nifh <- AlphaDiversity(MC_temp, q = 1, Correction = "Marcon")$Total
+  y_DIV_nifh[y_DIV_nifh$MC.ID == i,]$y_phyloDiv_nifh <- AlphaDiversity(MC_temp, ppTree, q = 1, Correction = "Marcon")$Total
+  
+
+}
+
+y_DIV_nifh <- 
+y_DIV_nifh %>% 
+  left_join( meta_full, .) %>% 
+  select(Level, sample, MC.ID, y_S_nifh, y_effN_nifh, y_phyloDiv_nifh) %>% 
+  left_join(DIV_nifh) %>% 
+  mutate(y_S_nifh = ifelse(Level == 1, S_nifh, y_S_nifh)) %>% 
+  mutate(y_effN_nifh = ifelse(Level == 1, effN_nifh, y_effN_nifh)) %>% 
+  mutate(y_phyloDiv_nifh = ifelse(Level == 1, phyloDiv_nifh, y_phyloDiv_nifh))
+
+write.table(y_DIV_nifh, "DIV_nifh.txt")
+
+```
+
+
+# calculate bacterial 16S diversity
+
+Read in the relevant files:
+```{r, cache = TRUE}
+OTU_bac <- read.table("16S_analysis/OTU_bac_clean.txt", header = TRUE, stringsAsFactors = FALSE)
+TREE_bac <- read.tree("16S_analysis/Tree_bac_um_oT.tre")
+```
+
++ remove "F" preceding sample number in OTU table
+
+
+```{r, cache = TRUE}
+dimnames(OTU_bac)[[1]] <- sub("C", "", dimnames(OTU_bac)[[1]])
+```
+
+### sampling depth 
+
+The distribution of sampling depth among all pooled samples is:
+```{r, cache = TRUE, echo=FALSE}
+barplot(sort(rowSums(OTU_bac), decreasing = TRUE), col = "white")
+```
+
+
+### sample completnes
+
+```{r, cache = TRUE}
+Rarecurves <- rarecurve(OTU_bac, step = 200)
+
+RareDF <- lapply(Rarecurves, function(x) data.frame(S = unlist(x)))
+names(RareDF) <- row.names(OTU_bac)
+
+RareDF <- do.call("rbind",RareDF )
+
+RareDF$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF)))
+RareDF$depth <- as.integer(gsub(".+N(\\d+)", "\\1", row.names(RareDF)))
+
+RareDF %>% 
+  left_join(meta) %>% 
+  ggplot(aes(x = depth, y = S, colour = sediment))+
+  facet_wrap(~Level * replicate, labeller = label_wrap_gen(multi_line=FALSE))+
+  geom_line() +
+  theme_bw()+
+  scale_color_manual(values = c("green", "darkgreen", "orange", "grey"))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+## richness and effective number of species
+
+```{r, cache = TRUE}
+
+MC <- MetaCommunity(t(OTU_bac))
+
+### richness ###
+
+cl <- makeCluster(2)
+
+CommunityEntropies <- parApply(cl, MC$Nsi, 2, bcTsallis, q = 0, CheckArguments=FALSE, Correction = "ChaoWangJost")
+
+DIV_S_bac <- data.frame(sample = as.numeric(names(CommunityEntropies)), 
+                       S_bac = CommunityEntropies, 
+                       row.names=NULL, stringsAsFactors = F)
+
+
+#### effective number of species ###
+cl <- makeCluster(4)
+
+CommunityEntropies <- parApply(cl, MC$Nsi, 2, bcTsallis, q = 1, CheckArguments=FALSE, Correction = "Marcon")
+CommunityDiversity <- exp(CommunityEntropies)
+
+DIV_effN_bac <- data.frame(sample = as.numeric(names(CommunityDiversity)), 
+                       effN_bac = CommunityDiversity, 
+                       row.names=NULL, stringsAsFactors = F)
+
+```
+
+## calculating the phylogenetic diversity based on effective number of species 
+
+```{r, cache = TRUE}
+ppTree <- Preprocess.Tree(multi2di(TREE_bac))
+
+
+cl <- makeCluster(4)
+
+CommunityEntropies_phylo <- parApply(cl, MC$Nsi, 2, bcPhyloEntropy, Tree = ppTree, q = 1, CheckArguments=FALSE, Correction = "Marcon")
+
+CommunityDiversity_phylo <- lapply( CommunityEntropies_phylo, function(x) exp(x$Total))
+CommunityDiversity_phylo <- unlist(CommunityDiversity_phylo)
+
+DIV_effN_phy_bac <- data.frame(sample = as.numeric(names(CommunityDiversity_phylo)), 
+                           phyloDiv_bac = CommunityDiversity_phylo, row.names=NULL)
+
+DIV_bac <- 
+  left_join(DIV_S_bac, DIV_effN_bac) %>% 
+  left_join(DIV_effN_phy_bac)
+  
+
+ggscatmat(DIV_bac[,2:4])
+```
+
+
+## calculating gamma diversity
+
+### pooling the OTU data
+
+in this step we pool the samples from the complete small cores 
+
++ For the Level 1 cores we don't need calculate gamma diversity. We only have one pooled measurement per large core as we only have one sediment type in each level 1 core.
+
++ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogentic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
+
+```{r, cache = TRUE}
+
+
+y_DIV_bac <- data.frame(MC.ID = unique(meta_full[meta_full$Level != 1, ]$MC.ID),
+                    y_S_bac = NA,
+                    y_effN_bac = NA,
+                    y_phyloDiv_bac = NA)
+
+
+for(i in y_DIV_bac$MC.ID) {
+  #extract OTU data from metacommunity i
+  OTU_temp <-  OTU_bac[ which( rownames( OTU_bac) %in% meta_full[ meta_full$MC.ID == i ,]$sample), ]
+  
+  #metacommunity object with weights
+  MC_temp <- MetaCommunity(t(OTU_temp), meta_full[meta_full$sample %in% as.numeric(rownames(OTU_temp)),]$weight)
+  
+  #calculate phylogenetic Alpha diveristy of order q = 1, with communities weighted by there relative proportion
+  y_DIV_bac[y_DIV_bac$MC.ID == i,]$y_S_bac <- AlphaDiversity(MC_temp, q = 0, Correction = "ChaoWangJost")$Total
+  y_DIV_bac[y_DIV_bac$MC.ID == i,]$y_effN_bac <- AlphaDiversity(MC_temp, q = 1, Correction = "Marcon")$Total
+  y_DIV_bac[y_DIV_bac$MC.ID == i,]$y_phyloDiv_bac <- AlphaDiversity(MC_temp, ppTree, q = 1, Correction = "Marcon")$Total
+  
+
+}
+
+y_DIV_bac <- 
+y_DIV_bac %>% 
+  left_join( meta_full, .) %>% 
+  select(Level, sample, MC.ID, y_S_bac, y_effN_bac, y_phyloDiv_bac) %>% 
+  left_join(DIV_bac) %>% 
+  mutate(y_S_bac = ifelse(Level == 1, S_bac, y_S_bac)) %>% 
+  mutate(y_effN_bac = ifelse(Level == 1, effN_bac, y_effN_bac)) %>% 
+  mutate(y_phyloDiv_bac = ifelse(Level == 1, phyloDiv_bac, y_phyloDiv_bac))
+
+write.table(y_DIV_bac, "DIV_bac.txt")
+
+```
+
+# calculating nosz diveristy
+
+## noszI
+
+### preprocessing nosz files
+
+Read in the relevant files:
+
++ otu_table noszI
+```{r, cache = TRUE}
+OTU_nosz1 <- read.table("nosz/nosZI_OTUtable_0.97_FR.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+dimnames(OTU_nosz1) <-  list(OTU_nosz1$OTU_ID, colnames(OTU_nosz1))
+OTU_nosz1 <- t(as.matrix(OTU_nosz1[,-1 ]))
+dimnames(OTU_nosz1)[[1]] <- sub("I", "", dimnames(OTU_nosz1)[[1]])
+```
+
+
++ otu_table noszII
+```{r, cache = TRUE}
+OTU_nosz2 <- read.table("nosz/nosZII_OTUtable_0.97_FR.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+dimnames(OTU_nosz2) <-  list(OTU_nosz2$OTU_ID, colnames(OTU_nosz2))
+OTU_nosz2 <- t(as.matrix(OTU_nosz2[,-1 ]))
+dimnames(OTU_nosz2)[[1]] <- sub("II", "", dimnames(OTU_nosz2)[[1]])
+
+```
+
++ phylogeny noszI & II
+```{r, cache = TRUE}
+TREE_nosz <- read.tree("nosz/nosZ_refs_reps_aligned.tree")
+
+phlyo_nosz <- phyloseq(otu_table( cbind(OTU_nosz1, OTU_nosz2), taxa_are_rows = FALSE),
+                      phy_tree(TREE_nosz),
+                      tax_table(matrix(c(rep("nozI", ncol(OTU_nosz1)), rep("noszII", ncol(OTU_nosz2))),
+                                       dimnames = list(c(colnames(OTU_nosz1), colnames(OTU_nosz2)), "nosz"))))
+
+plot_tree(phlyo_nosz, color = "nosz")
+
+```
+
++ making tree ultrametric
+
+```{r, cache = TRUE}
+
+write.tree(TREE_nosz, "nosz/nosZ_refs_reps_aligned_FR.tree")
+
+system("/Applications/PATHd8/PATHd8 nosz/nosZ_refs_reps_aligned_FR.tree nosz/nosZ_um.tree")
+system("grep '^d8 tree' nosz/nosZ_um.tree > nosz/nosZ_um_oT.tree")
+```
+
+```{r, cache = TRUE}
+TREE_nosz <- read.tree("nosz/nosZ_um_oT.tree")
+
+phlyo_nosz <- phyloseq(otu_table( cbind(OTU_nosz1, OTU_nosz2), taxa_are_rows = FALSE),
+                      phy_tree(TREE_nosz),
+                      tax_table(matrix(c(rep("nozI", ncol(OTU_nosz1)), rep("noszII", ncol(OTU_nosz2))),
+                                       dimnames = list(c(colnames(OTU_nosz1), colnames(OTU_nosz2)), "nosz"))))
+
+plot_tree(phlyo_nosz, color = "nosz")
+  
+
+```
+
++ split Tree into two trees for noszI and noszII
++ delete all non-OTU sequences during the process
++ keep one OTU of noszI and noszII in the respective other tree, to keep root edge
+
+```{r, cache = TRUE}
+TREE_nosz1 <- drop.tip(TREE_nosz, TREE_nosz$tip.label[! TREE_nosz$tip.label %in% c(colnames(OTU_nosz1),colnames(OTU_nosz2)[1])])
+
+phlyo_noszI <- phyloseq(otu_table( cbind(OTU_nosz1, OTU_nosz2), taxa_are_rows = FALSE),
+                      phy_tree(TREE_nosz1),
+                      tax_table(matrix(c(rep("nozI", ncol(OTU_nosz1)), rep("noszII", ncol(OTU_nosz2))),
+                                       dimnames = list(c(colnames(OTU_nosz1), colnames(OTU_nosz2)), "nosz"))))
+
+plot_tree(phlyo_noszI, color = "nosz")
+```
+
+```{r, cache = TRUE}
+TREE_nosz2 <- drop.tip(TREE_nosz, TREE_nosz$tip.label[! TREE_nosz$tip.label %in% c(colnames(OTU_nosz2),colnames(OTU_nosz1)[1])])
+
+phlyo_noszII <- phyloseq(otu_table( cbind(OTU_nosz1, OTU_nosz2), taxa_are_rows = FALSE),
+                      phy_tree(TREE_nosz2),
+                      tax_table(matrix(c(rep("nozI", ncol(OTU_nosz1)), rep("noszII", ncol(OTU_nosz2))),
+                                       dimnames = list(c(colnames(OTU_nosz1), colnames(OTU_nosz2)), "nosz"))))
+
+plot_tree(phlyo_noszII, color = "nosz")
+```
+
+## calculate the diversity of nosz1 genes
+
+### sampling depth 
+
+The distribution of sampling depth among all pooled samples is:
+```{r, cache = TRUE}
+barplot(sort(rowSums(OTU_nosz1), decreasing = TRUE), col = "white")
+```
+
+
+### sample completnes
+
+```{r, cache = TRUE}
+Rarecurves <- rarecurve(OTU_nosz1, step = 20)
+
+RareDF <- lapply(Rarecurves, function(x) data.frame(S = unlist(x)))
+names(RareDF) <- row.names(OTU_nosz1)
+
+RareDF <- do.call("rbind",RareDF )
+
+RareDF$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF)))
+RareDF$depth <- as.integer(gsub(".+N(\\d+)", "\\1", row.names(RareDF)))
+
+RareDF %>% 
+  left_join(meta) %>% 
+  ggplot(aes(x = depth, y = S, colour = sediment))+
+  facet_wrap(~Level * replicate, labeller = label_wrap_gen(multi_line=FALSE))+
+  geom_line() +
+  theme_bw()+
+  scale_color_manual(values = c("green", "darkgreen", "orange", "grey"))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+## richness and effective number of species
+
+```{r, cache = TRUE}
+
+MC <- MetaCommunity(t(OTU_nosz1))
+
+### richness ###
+
+cl <- makeCluster(2)
+
+CommunityEntropies <- parApply(cl, MC$Nsi, 2, bcTsallis, q = 0, CheckArguments=FALSE, Correction = "ChaoWangJost")
+
+DIV_S_nosz1 <- data.frame(sample = as.numeric(names(CommunityEntropies)), 
+                       S_nosz1 = CommunityEntropies, 
+                       row.names=NULL, stringsAsFactors = F)
+
+
+#### effective number of species ###
+cl <- makeCluster(2)
+
+CommunityEntropies <- parApply(cl, MC$Nsi, 2, bcTsallis, q = 1, CheckArguments=FALSE, Correction = "Marcon")
+CommunityDiversity <- exp(CommunityEntropies)
+
+DIV_effN_nosz1 <- data.frame(sample = as.numeric(names(CommunityDiversity)), 
+                       effN_nosz1 = CommunityDiversity, 
+                       row.names=NULL, stringsAsFactors = F)
+
+```
+
+## calculating the phylogenetic diversity based on effective number of species 
+
+```{r, cache = TRUE}
+ppTree <- Preprocess.Tree(multi2di(TREE_nosz1))
+
+
+cl <- makeCluster(4)
+
+CommunityEntropies_phylo <- parApply(cl, MC$Nsi, 2, bcPhyloEntropy, Tree = ppTree, q = 1, CheckArguments=FALSE, Correction = "Marcon")
+
+CommunityDiversity_phylo <- lapply( CommunityEntropies_phylo, function(x) exp(x$Total))
+CommunityDiversity_phylo <- unlist(CommunityDiversity_phylo)
+
+DIV_effN_phy_nosz1 <- data.frame(sample = as.numeric(names(CommunityDiversity_phylo)), 
+                           phyloDiv_nosz1 = CommunityDiversity_phylo, row.names=NULL)
+
+DIV_nosz1 <- 
+  left_join(DIV_S_nosz1, DIV_effN_nosz1) %>% 
+  left_join(DIV_effN_phy_nosz1)
+  
+
+ggscatmat(DIV_nosz1[,2:4])
+```
+
+
+## calculating gamma diversity
+
+### pooling the OTU data
+
+in this step we pool the samples from the complete small cores 
+
++ For the Level 1 cores we don't need calculate gamma diversity. We only have one pooled measurement per large core as we only have one sediment type in each level 1 core.
+
++ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogentic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
+
+```{r, cache = TRUE}
+
+
+y_DIV_nosz1 <- data.frame(MC.ID = unique(meta_full[meta_full$Level != 1, ]$MC.ID),
+                    y_S_nosz1 = NA,
+                    y_effN_nosz1 = NA,
+                    y_phyloDiv_nosz1 = NA)
+
+
+for(i in y_DIV_nosz1$MC.ID) {
+  #extract OTU data from metacommunity i
+  OTU_temp <-  OTU_nosz1[ which( rownames( OTU_nosz1) %in% meta_full[ meta_full$MC.ID == i ,]$sample), ]
+  
+  #metacommunity object with weights
+  MC_temp <- MetaCommunity(t(OTU_temp), meta_full[meta_full$sample %in% as.numeric(rownames(OTU_temp)),]$weight)
+  
+  #calculate phylogenetic Alpha diveristy of order q = 1, with communities weighted by there relative proportion
+  y_DIV_nosz1[y_DIV_nosz1$MC.ID == i,]$y_S_nosz1 <- AlphaDiversity(MC_temp, q = 0, Correction = "ChaoWangJost")$Total
+  y_DIV_nosz1[y_DIV_nosz1$MC.ID == i,]$y_effN_nosz1 <- AlphaDiversity(MC_temp, q = 1, Correction = "Marcon")$Total
+  y_DIV_nosz1[y_DIV_nosz1$MC.ID == i,]$y_phyloDiv_nosz1 <- AlphaDiversity(MC_temp, ppTree, q = 1, Correction = "Marcon")$Total
+  
+
+}
+
+y_DIV_nosz1 <- 
+y_DIV_nosz1 %>% 
+  left_join( meta_full, .) %>% 
+  select(Level, sample, MC.ID, y_S_nosz1, y_effN_nosz1, y_phyloDiv_nosz1) %>% 
+  left_join(DIV_nosz1) %>% 
+  mutate(y_S_nosz1 = ifelse(Level == 1, S_nosz1, y_S_nosz1)) %>% 
+  mutate(y_effN_nosz1 = ifelse(Level == 1, effN_nosz1, y_effN_nosz1)) %>% 
+  mutate(y_phyloDiv_nosz1 = ifelse(Level == 1, phyloDiv_nosz1, y_phyloDiv_nosz1))
+
+write.table(y_DIV_nosz1, "DIV_nosz1.txt")
+
+```
+
+# nosz II
+
+### sampling depth 
+
+The distribution of sampling depth among all pooled samples is:
+```{r, cache = TRUE}
+barplot(sort(rowSums(OTU_nosz2), decreasing = TRUE), col = "white")
+```
+
+
+### sample completnes
+
+```{r, cache = TRUE}
+Rarecurves <- rarecurve(OTU_nosz2, step = 20)
+
+RareDF <- lapply(Rarecurves, function(x) data.frame(S = unlist(x)))
+names(RareDF) <- row.names(OTU_nosz2)
+
+RareDF <- do.call("rbind",RareDF )
+
+RareDF$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF)))
+RareDF$depth <- as.integer(gsub(".+N(\\d+)", "\\1", row.names(RareDF)))
+
+RareDF %>% 
+  left_join(meta) %>% 
+  ggplot(aes(x = depth, y = S, colour = sediment))+
+  facet_wrap(~Level * replicate, labeller = label_wrap_gen(multi_line=FALSE))+
+  geom_line() +
+  theme_bw()+
+  scale_color_manual(values = c("green", "darkgreen", "orange", "grey"))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+## richness and effective number of species
+
+```{r, cache = TRUE}
+
+MC <- MetaCommunity(t(OTU_nosz2))
+
+### richness ###
+
+cl <- makeCluster(2)
+
+CommunityEntropies <- parApply(cl, MC$Nsi, 2, bcTsallis, q = 0, CheckArguments=FALSE, Correction = "ChaoWangJost")
+
+DIV_S_nosz2 <- data.frame(sample = as.numeric(names(CommunityEntropies)), 
+                       S_nosz2 = CommunityEntropies, 
+                       row.names=NULL, stringsAsFactors = F)
+
+
+#### effective number of species ###
+cl <- makeCluster(2)
+
+CommunityEntropies <- parApply(cl, MC$Nsi, 2, bcTsallis, q = 1, CheckArguments=FALSE, Correction = "Marcon")
+CommunityDiversity <- exp(CommunityEntropies)
+
+DIV_effN_nosz2 <- data.frame(sample = as.numeric(names(CommunityDiversity)), 
+                       effN_nosz2 = CommunityDiversity, 
+                       row.names=NULL, stringsAsFactors = F)
+
+```
+
+## calculating the phylogenetic diversity based on effective number of species 
+
+```{r, cache = TRUE}
+ppTree <- Preprocess.Tree(multi2di(TREE_nosz2))
+
+
+cl <- makeCluster(4)
+
+CommunityEntropies_phylo <- parApply(cl, MC$Nsi, 2, bcPhyloEntropy, Tree = ppTree, q = 1, CheckArguments=FALSE, Correction = "Marcon")
+
+CommunityDiversity_phylo <- lapply( CommunityEntropies_phylo, function(x) exp(x$Total))
+CommunityDiversity_phylo <- unlist(CommunityDiversity_phylo)
+
+DIV_effN_phy_nosz2 <- data.frame(sample = as.numeric(names(CommunityDiversity_phylo)), 
+                           phyloDiv_nosz2 = CommunityDiversity_phylo, row.names=NULL)
+
+DIV_nosz2 <- 
+  left_join(DIV_S_nosz2, DIV_effN_nosz2) %>% 
+  left_join(DIV_effN_phy_nosz2)
+  
+
+ggscatmat(DIV_nosz2[,2:4])
+```
+
+
+## calculating gamma diversity
+
+### pooling the OTU data
+
+in this step we pool the samples from the complete small cores 
+
++ For the Level 1 cores we don't need calculate gamma diversity. We only have one pooled measurement per large core as we only have one sediment type in each level 1 core.
+
++ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogentic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
+
+```{r, cache = TRUE}
+
+
+y_DIV_nosz2 <- data.frame(MC.ID = unique(meta_full[meta_full$Level != 1, ]$MC.ID),
+                    y_S_nosz2 = NA,
+                    y_effN_nosz2 = NA,
+                    y_phyloDiv_nosz2 = NA)
+
+
+for(i in y_DIV_nosz2$MC.ID) {
+  #extract OTU data from metacommunity i
+  OTU_temp <-  OTU_nosz2[ which( rownames( OTU_nosz2) %in% meta_full[ meta_full$MC.ID == i ,]$sample), ]
+  
+  #metacommunity object with weights
+  MC_temp <- MetaCommunity(t(OTU_temp), meta_full[meta_full$sample %in% as.numeric(rownames(OTU_temp)),]$weight)
+  
+  #calculate phylogenetic Alpha diveristy of order q = 1, with communities weighted by there relative proportion
+  y_DIV_nosz2[y_DIV_nosz2$MC.ID == i,]$y_S_nosz2 <- AlphaDiversity(MC_temp, q = 0, Correction = "ChaoWangJost")$Total
+  y_DIV_nosz2[y_DIV_nosz2$MC.ID == i,]$y_effN_nosz2 <- AlphaDiversity(MC_temp, q = 1, Correction = "Marcon")$Total
+  y_DIV_nosz2[y_DIV_nosz2$MC.ID == i,]$y_phyloDiv_nosz2 <- AlphaDiversity(MC_temp, ppTree, q = 1, Correction = "Marcon")$Total
+  
+
+}
+
+y_DIV_nosz2 <- 
+y_DIV_nosz2 %>% 
+  left_join( meta_full, .) %>% 
+  select(Level, sample, MC.ID, y_S_nosz2, y_effN_nosz2, y_phyloDiv_nosz2) %>% 
+  left_join(DIV_nosz2) %>% 
+  mutate(y_S_nosz2 = ifelse(Level == 1, S_nosz2, y_S_nosz2)) %>% 
+  mutate(y_effN_nosz2 = ifelse(Level == 1, effN_nosz2, y_effN_nosz2)) %>% 
+  mutate(y_phyloDiv_nosz2 = ifelse(Level == 1, phyloDiv_nosz2, y_phyloDiv_nosz2))
+
+write.table(y_DIV_nosz2, "DIV_nosz2.txt")
+
+```
+
+
+## joining and exporting the data
+
+```{r}
+DIV <- left_join(y_DIV_nifh, y_DIV_nosz1) %>% left_join(., y_DIV_nosz2) %>% left_join(., y_DIV_bac)
+
+write.table(DIV, "Diversity_estimations.txt")
+```
+
+# diversity plots
+
+```{r}
+DIV_plot <- DIV %>% 
+  select(sample, matches("^effn|^phylo|^S")) %>%
+  gather(variable, value, -sample) %>% 
+  mutate(gene = gsub("\\w+_(\\w+)", "\\1", variable)) %>%
+  mutate(metric = gsub("(\\w+)_\\w+", "\\1", variable)) %>% 
+  select(-variable) %>% 
+  spread(metric, value) %>% 
+  left_join(meta)
+  
+```
+
+```{r}
+ggplot(DIV_plot, aes(x = sediment, y = S, colour = sediment))+
+  geom_point()+
+  facet_grid(gene~Level, scale = "free")+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
+  theme_bw()+
+  theme(axis.text.x=element_text(angle = -90, hjust = 0, vjust = 0.5))+
+  labs(title = "species richness")
+```
+
+```{r}
+ggplot(DIV_plot, aes(x = sediment, y = effN, colour = sediment))+
+  geom_point()+
+  facet_grid(gene~Level, scale = "free")+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
+  theme_bw()+
+  theme(axis.text.x=element_text(angle = -90, hjust = 0, vjust = 0.5))+
+  labs(title = "effective number of species")
+```
+
+
+```{r}
+ggplot(DIV_plot, aes(x = sediment, y = phyloDiv, colour = sediment))+
+  geom_point()+
+  facet_grid(gene~Level, scale = "free")+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
+  theme_bw()+
+  theme(axis.text.x=element_text(angle = -90, hjust = 0, vjust = 0.5))+
+  labs(title = "phylogenetic diversity")
+```
