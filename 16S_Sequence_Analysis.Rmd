@@ -3,14 +3,20 @@ title: "Analysis of 16S Data"
 output: html_notebook
 ---
 
-```{r}
+```{r, echo = FALSE}
 library(tidyverse)
 library(knitr)
+library(dada2)
+library(ape)
+library(Biostrings)
+library(DECIPHER)
 library(phyloseq)
-library(entropart)
-library(vegan)
 ```
 
+import sample meta-data (for later)
+```{r}
+meta <- read.table("metadata.txt", header = TRUE)
+```
 
 Here I re-analyse the 16 S data, starting from the file **Christian_all1_150.fna** that I got from Jaanis.
 
@@ -20,8 +26,9 @@ The file containes all merged sequences (from all three seasons).
 head 16S_analysis/Christian_all1_150.fna
 ```
 
-```{r, engine = "bash"}
-grep -c '^>' 16S_analysis/Christian_all1_150.fna
+```{r, cache = TRUE}
+Nreads <- system("grep -c '^>' 16S_analysis/Christian_all1_150.fna", intern = T)
+Nreads
 ```
 
 
@@ -34,76 +41,70 @@ data.frame(`.` = c( "sequence","direction","length"),
   kable(caption = "primer sequences")
 ```
 
-#### Primer filterring and trimming
+### length filtering
 
-+ I search for the two primers
-+ filter out only sequences that match both primer (with 1 allowed missmatch)
-+ I look for the reverse complement, too, in order to match reverse primer
++ trimm SILVA reference database with the primers used (to compare sequence length)
+```{r, engine = "bash", engine.path = "/usr/local/bin/bash" }
+# point shell to right bash (script need bash 4)
+export PATH="/usr/local/bin:$PATH"
 
-```{r, engine = "bash"}
+CUTADAPT="/Applications/cutadapt/cutadapt --trimmed-only"
 
-/Applications/bbmap/bbduk2.sh in=16S_analysis/Christian_all1_150.fna \
-      fliteral=CCTACGGGNBGCASCAG,GACTACNVGGGTATCTAATCC \
-			minkmerhits=2 \
-			k=17 \
-			copyundefined \
-			rcomp=t \
-			hammingdistance=1 \
-			outm='16S_analysis/with_Primer.fasta' \
-			out='16S_analysis/no_F_Primer.fasta' \
-			stats='16S_analysis/Primer_stats.txt'\
-      overwrite=true \
-			-Xmx6g
+cat 16S_analysis/Silva_SSU.fasta | ${CUTADAPT} -g 'CCTACGGGNBGCASCAG' -O 17 - | ${CUTADAPT} -a 'GGATTAGATACCCBNGTAGTC' -O 21 - > 16S_analysis/Silva_trimmed.fasta
+         
+        
 ```
 
-+ trimming of the primers (and any seqeunce before the foward or after the reverse primer, if any)
++ plot relative frequency of 
+```{r}
+ReadLengthSilva <- fasta.seqlengths("16S_analysis/Silva_trimmed.fasta")
 
-```{r, engine = "bash"}
+FS <- table(ReadLengthSilva) %>% 
+  as.data.frame() %>% 
+  mutate(ReadLengthSilva = as.numeric(as.character(ReadLengthSilva))) %>% 
+  mutate(ReadLengthSilva = ReadLengthSilva + 21 + 17) %>% 
+  mutate(Freq = (Freq / sum(Freq))*100) %>% 
+  rename(Freq = "Freq_Silva")
 
-/Applications/bbmap/bbduk2.sh in=16S_analysis/with_Primer.fasta \
-			lliteral=CCTACGGGNBGCASCAG\
-      rliteral=GACTACNVGGGTATCTAATCC\
-			k=17 \
-			copyundefined \
-			rcomp=t \
-			hammingdistance=1 \
-			out='16S_analysis/trimmed_Primer.fasta' \
-      overwrite=true \
-			-Xmx6g
-```
+ReadLength <- fasta.seqlengths("16S_analysis/Christian_all1_150.fna")
+
+FCA <- table(ReadLength) %>% 
+  as.data.frame() %>% 
+  mutate(ReadLength = as.numeric(as.character(ReadLength))) %>% 
+  mutate(Freq = (Freq / sum(Freq))*100) %>%
+  rename(Freq = "Freq_CA")
+
+ggplot(FCA, aes(x = ReadLength, y = Freq_CA))+
+  geom_bar(stat = "identity", fill = "blue", colour = "NA", alpha = 0.5) +
+  geom_bar(data = FS, aes(x = ReadLengthSilva, y = Freq_Silva), stat = "identity", fill = NA , colour = "black")+
+  scale_x_continuous(limits = c(415, 480), breaks = seq(415,480,2))+
+  labs(title = "expected read length with our primers (black lines - SILVA) &\nobserved read lenghts in merged reads (blue bars)", y = "frequency of read length (% of total)")+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  
 
 
-```{r, engine = "bash"}
-
-/Applications/bbmap/bbduk.sh in=16S_analysis/trimmed_Primer.fasta lhist=16S_analysis/lhist.txt
-
+  
 
 ```
 
 ```{r}
-
-hist <- read.table("16S_analysis/lhist.txt")
-
-ggplot(hist, aes(x = V1, y = V2))+
-  geom_bar(stat = "identity")+
-  labs(title = "histrogram of read length")
-
-ggplot(hist, aes(x = V1, y = V2))+
-  geom_bar(stat = "identity")+
-  labs(title = "read length of middle 98% of reads")+
-  scale_x_continuous(limits= quantile(rep(hist$V1, hist$V2), c(0.01, 0.99)))
-
-
+/Applications/vsearch/bin/vsearch
 ```
+
 
 #### dereplication
 
-+ removing global singletons
++ removing global singletons 
++ removing sequences longer than 470 bp
++ removing sequences shorter than 420 bp
 
 ```{r, engine = "bash"}
 
 /Applications/vsearch/bin/vsearch --threads 2 \
-		--derep_fulllength 16S_analysis/trimmed_Primer.fasta \
+		--derep_fulllength 16S_analysis/Christian_all1_150.fna \
+		--minseqlength 420 \
+		--maxseqlength 470 \
 		--minuniquesize 2 \
 		--sizeout \
 		--output 16S_analysis/derep.fa
@@ -134,6 +135,7 @@ ggplot(hist, aes(x = V1, y = V2))+
 ```
 
 #### Denovo chimera checking
+
 ```{r, engine="bash"}
 /Applications/vsearch/bin/vsearch --uchime_denovo 16S_analysis/otus1_sorted.fa \
     --chimeras 16S_analysis/otus1_chimeric_denovo.fa \
@@ -151,66 +153,27 @@ ggplot(hist, aes(x = V1, y = V2))+
     + SUU - REF NR 99
     + opened in arb, exported all bacteria & archea species as fasta (Silva_SSU.fasta) (unaligned)
     + 576554 sequences
+    + trimmed with primers
+    + filterd for reasonable length fragments
     
-```{r}
-
-specLength <- fasta.seqlengths("16S_analysis/Silva_SSU.fasta")
-
-specLength %>%
-  as_data_frame() %>% 
-  ggplot(., aes(x = value))+
-  geom_histogram(binwidth = 100)+
-  scale_x_continuous(breaks = seq(0,6000, 200))+
-  labs(x = "length", title = "seqeuncing length distribution in reference db")
-
-```
-
++ filtering of trimmed Silva ref file
+    
 ```{r, engine = "bash"}
 
-/Applications/bbmap/bbduk2.sh in=16S_analysis/Silva_SSU.fasta \
-      fliteral=CCTACGGGNBGCASCAG,GACTACNVGGGTATCTAATCC \
-			minkmerhits=2 \
-			k=17 \
-			copyundefined \
-			rcomp=t \
-			hammingdistance=1 \
-			outm=16S_analysis/Silva_with_Primer.fasta \
-      overwrite=true \
-			-Xmx6g
+/Applications/vsearch/bin/vsearch \
+		--derep_fulllength 16S_analysis/Silva_trimmed.fasta \
+		--minseqlength 400 \
+		--maxseqlength 490 \
+		--output 16S_analysis/Silva_trimmed_derep.fasta
 
-
-/Applications/bbmap/bbduk2.sh in=16S_analysis/Silva_with_Primer.fasta \
-			lliteral=CCTACGGGNBGCASCAG \
-      rliteral=GACTACNVGGGTATCTAATCC \
-			k=17 \
-			copyundefined \
-			rcomp=t \
-			hammingdistance=1 \
-			out=16S_analysis/Silva_SSU_trimmed.fasta \
-      overwrite=true \
-			-Xmx6g
-			
-rm 16S_analysis/Silva_with_Primer.fasta
-```
-
-```{r}
-
-specLength <- fasta.seqlengths("16S_analysis/Silva_SSU_trimmed.fasta")
-
-specLength %>%
-  as_data_frame() %>% 
-  ggplot(., aes(x = value))+
-  geom_histogram()+
-  scale_x_continuous(breaks = seq(350,450, 4), limits=c(360, 450))+
-  labs(x = "length", title = "seqeuncing length distribution in reference db\ncut with primers")+
-  theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 ```
-
+  
++ reference chimera removal
     
 ```{r, engine="bash"}
 /Applications/vsearch/bin/vsearch --uchime_ref 16S_analysis/otus1_denonvo.fa \
-    --db 16S_analysis/Silva_SSU.fasta \
+    --db 16S_analysis/Silva_trimmed_derep.fasta \
     --chimeras 16S_analysis/otus1_chimera_ref.fa \
     --nonchimeras 16S_analysis/otus_16s_final.fa \
     --uchimeout 16S_analysis/uchime_reference.tab
@@ -259,11 +222,11 @@ NC <-
 + mapping reads
 
 ```{r, engine = "bash"}
-/Applications/vsearch/bin/vsearch --usearch_global 16S_analysis/trimmed_Primer.fasta \
+/Applications/vsearch/bin/vsearch --usearch_global 16S_analysis/Christian_all1_150.fna \
     --db 16S_analysis/otus_final_nosingle.fa \
     --id 0.97 \
     --self \
-    --maxaccepts 16 \
+    --maxaccepts 8 \
     --wordlength 8 \
     --strand both \
     --log cluster.log \
@@ -274,7 +237,7 @@ NC <-
 
 ```{r}
 OTU <- import_usearch_uc("16S_analysis/otu_table_map.uc")
-write.table(OTU, "OTU_16S.txt", sep = "\t")
+
 ```
 
 ```{r}
@@ -285,6 +248,263 @@ colSums(OTU) %>%
   scale_x_log10(breaks = c(2^seq(1,20,1)))+
   theme(axis.text.x = element_text(angle = 90, hjust = 1))+
   labs(title = "histogramm of OTU abundances - log scale")
+
+```
+
+
+### assign Taxonomy 
+
+I assign the taxonomy with the silva reference file for two reasosns:
+
++ it seems to have more eucaryote / mitochondria / chloroplast seqeunces so that it correctly identify those in our samples
++ it produces fewer NA alignments than the RDP ref (although considerably more than gg at Class level) see tax_comp.Rdp for the code for these analyses. 
+
+I use minBoot = 80% for the assignment threshold as recommended for sequences longer than 250 bp 
+
++ first we need to create a uniques vector as expected by dada2
+
+```{r}
+OTU_rep <- readDNAStringSet("16S_analysis/otus_final_nosingle.fa")
+
+OTU_DF <- data.frame(sequence = as.character(OTU_rep), stringsAsFactors = F) %>%
+  rownames_to_column(var = "names") %>% 
+  mutate(abundance = as.numeric(gsub(".+=(\\d+);", "\\1", names))) %>% 
+  mutate(OTU = (gsub("(^OTU_\\d+);.+", "\\1", names)))
+  
+seqs <- getUniques(OTU_DF)
+```
+
++ assign taxonomy
+
+```{r, cache=TRUE}
+taxa_silva <- assignTaxonomy(seqs, "16S_analysis/silva_nr_v123_train_set.fa.gz", minBoot = 80)
+
+colnames(taxa_silva) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus")
+
+write.table(taxa_silva, '16S_analysis/Tax.txt')
+
+taxa_silva <- as.matrix(read.table("16S_analysis/Tax.txt"))
+```
+
++ change sequence names to OTUs to match OTU table
++ shorten OTU names to match taxa table
+
+```{r}
+dimnames(taxa_silva)[[1]] <- OTU_DF[match(dimnames(taxa_silva)[[1]], OTU_DF$sequence),]$OTU
+dimnames(OTU)[[2]] <- gsub("(^OTU_\\d+);.+", "\\1", dimnames(OTU)[[2]])
+```
+
+
+As we work with environmental samples we might have spourious non-bacterial sequences remaining, including 
+
++ Eukaryota
++ Chloroplast
++ Rickettsiales
+
+We will check how many seqeunces these represent
+
+Wich samples contain (sample name & sum of the seqeunces shown)
+
++ Chloroplasts (% of reads / sample)
+
+```{r}
+Chl <- rowSums(OTU[, rownames(which(taxa_silva == "Chloroplast", arr.ind=T))])[which(rowSums(OTU[, rownames(which(taxa_silva == "Chloroplast", arr.ind=T))]) > 0)]
+
+Chl <- signif((Chl/rowSums(OTU[names(Chl),]))*100, 2) %>% 
+  data.frame() %>% 
+  rename(`.` = "frct_Chl") %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = as.numeric(gsub("C(\\d+)", "\\1", sample))) %>% 
+  left_join(meta)
+
+  ggplot(Chl, aes(x = sediment, y = frct_Chl, colour = sediment))+
+  geom_point(position=position_jitter(width = 0.3, height = 0))+
+  facet_wrap(~season*Level)+
+  theme_bw()+
+  theme(legend.position = "none")
+
+
+
+```
+
++ we export the fraction of Chloroplast reads in each sample to correct the q-PCR measurements
+
+```{r}
+
+Chl %>% select(sample, frct_Chl) %>% write.table(., "frct_Chl.txt")
+
+```
+
+
++ Mitochondria
+
+```{r}
+Mit <- rowSums(OTU[, rownames(which(taxa_silva == "Mitochondria", arr.ind=T))])[which(rowSums(OTU[, rownames(which(taxa_silva == "Mitochondria", arr.ind=T))]) > 0)]
+
+signif((Mit/rowSums(OTU[names(Mit),]))*100, 2) %>% 
+  data.frame() %>% 
+  rename(`.` = "frct_Mit") %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = as.numeric(gsub("C(\\d+)", "\\1", sample))) %>% 
+  left_join(meta) %>% 
+  ggplot(., aes(x = sediment, y = frct_Mit, colour = sediment))+
+  geom_point(position=position_jitter(width = 0.3, height = 0))+
+  facet_wrap(~season*Level)+
+  theme_bw()+
+  theme(legend.position = "none")
+```
+
+there are only very few mitochondria reads in the samples (max 0.025 %). We remove them but can ignore them for the q-PCR
+
+
++ Eukaryota
+
+```{r}
+rowSums(OTU[, rownames(which(taxa_silva == "Eukaryota", arr.ind=T))])[which(rowSums(OTU[, rownames(which(taxa_silva == "Eukaryota", arr.ind=T))]) > 0)]
+```
+
+there are no eucaryotic sequences
+
+in total 
+
+```{r}
+no_Bac <- sum(OTU[, rownames(which(taxa_silva == "Eukaryota" | taxa_silva == "Mitochondria" | taxa_silva == "Chloroplast", arr.ind=T))])
+no_Bac
+paste(round((no_Bac/sum(OTU))*100,2), "%")
+```
+
+reads belong to either to the above groups, corresponding to 
+```{r}
+length(rownames(which(taxa_silva == "Eukaryota" | taxa_silva == "Mitochondria" | taxa_silva == "Chloroplast", arr.ind=T)))
+```
+sequences. 
+
+The sequences are removed from both the taxa table and the OTU table
+
+Moreover,
+ 
+```{r}
+length(which(is.na(taxa_silva[,1])))
+```
+
+sequences that make up
+
+```{r}
+noAss <- sum((OTU[, names(which(is.na(taxa_silva[,1])))]))
+
+noAss
+paste(signif(noAss/sum(OTU) * 100 ,2), "%")
+```
+
+sequences are not assigned at Kingdom level and are also removed. 
+
+```{r}
+exclude_seq <- rownames(which(taxa_silva == "Eukaryota" | taxa_silva == "Mitochondria" | taxa_silva == "Chloroplast", arr.ind=T))
+exclude_seq <- c(exclude_seq, names( which( is.na( taxa_silva[,1]))) )
+
+taxa_silva_clean <- taxa_silva[which(! rownames(taxa_silva) %in% exclude_seq), ]
+OTU_clean <- OTU[, which(! colnames(OTU) %in% exclude_seq) ]
+
+```
+
+### Make Phylogeny
+
+We make a global alignment of the sequences with the `DECIPHER` package
+
+for that we make a multiple seqeunce alignment with `AlignSeqs`.
+
+as we want to use the alignment to build a phylogenitc tree we [follow the advice](https://www.bioconductor.org/packages/devel/bioc/vignettes/DECIPHER/inst/doc/ArtOfAlignmentInR.pdf) to stagger the alignment, too. 
+
+```{r}
+
+seqs <- getSequences(OTU_DF[OTU_DF$OTU %in% colnames(OTU_clean), ])
+names(seqs) <- OTU_DF[OTU_DF$OTU %in% colnames(OTU_clean), ]$OTU # This propagates to the tip labels of the tree
+seqs <- DNAStringSet(seqs)
+
+msa <- AlignSeqs(seqs, iterations = 2, refinements = 2, verbose = FALSE) # make multiple sequence alignment
+
+BrowseSeqs(msa, htmlFile="16S_analysis/msa_alignment.html", openURL = F, highlight = 1)
+```
+
+after the alignment, we also inspect a histogramm of the distance among the seqeunces. If there are clear outliers in the histogramm, it is likely that we still have non-biological seqeunces in the dataset that need to be removed. 
+
+```{r}
+Dist <- DistanceMatrix(msa, verbose = TRUE )
+
+plot(sort(colSums(Dist), decreasing = T)[1:300], ylab = "colSums(Dist)", 
+     main = "Sum of Distances for all Sequences", 
+     xlab = "Sequences (first 100, decreasing order of total distance)")
+
+distSeqs <- sort(colSums(Dist), decreasing = TRUE)[1:4]
+distSeqs
+
+```
+
+We can see that 3 (possibly 4) Sequences are much more differnet from all other seqeunces that the remaining seqeunces are on average. This can be because they are missaligned, representatives of a distant clade or non-biological sequences. To find out we can check their taxonomic assignemnt (which is independetn of the alignment)
+
+```{r}
+unname(taxa_silva_clean[rownames(taxa_silva_clean) %in% names(distSeqs) ,])
+```
+
+We see that the two suspected sequences are classified down to the family level and identified as archaea. We keep them. 
+
++ export the clean OTU table
+
+```{r}
+write.table(OTU_clean, "16S_analysis/OTU_bac_clean.txt")
+write.table(taxa_silva_clean, "16S_analysis/Tax_clean.txt")
+```
+
+
+We also follow [the advice](https://www.bioconductor.org/packages/devel/bioc/vignettes/DECIPHER/inst/doc/ArtOfAlignmentInR.pdf) to Stagger the alignment for more accurate Tree building
+
+>To mitigate the problem of false homologies, StaggerAlignment will automatically generate a staggered version of an existing alignment. Staggered alignments separate potentially non-homologous regions into separate columns of the alignment. The result is an alignment that is less visually appealing, but likely more accurate in a phylogenetic sense. As such, this is an important post-processing step whenever the alignment will be used to construct a phylogenetic tree
+
+
+```{r}
+msa_stag <- StaggerAlignment(msa)
+
+BrowseSeqs(msa_stag, htmlFile="16S_analysis/msa_alignment_staggered.html", openURL = F, highlight = 1)
+
+writeXStringSet(msa_stag, file= "16S_analysis/aligned_seqs.fasta")
+
+```
+
+Becasue we have so many sequences, we will use [FastTree](http://meta.microbesonline.org/fasttree/) to estimate an approximately-maximum-likelihood phylogenetic tree. It is orders of magnitues faster than the corresponding R implementation phangorn. Also, becasue the downstream estimation of phylogentic diveristy requires an ultrametric tree, we use [PATHd8](http://www2.math.su.se/PATHd8/) for the phylogenetic dating. 
+
+note that PATH8 produces a big file with lots of additional information that is not very relevant in our case. Therefore we grep the tree from the produced output file and save it separately. 
+
+I also root the tree at the bacteria / archea divide, by defining all OTUs identified as Archea as "outgroup"
+
+```{r}
+system("/Applications/FastTree/FastTree -gtr -nt 16S_analysis/aligned_seqs.fasta > 16S_analysis/FastTree.tre")
+
+TREE <- read.tree("16S_analysis/FastTree.tre")
+
+# root tree at the Archea - Bacteria split
+## which OTUs are Archea
+Archea_OTU <- rownames(taxa_silva_clean[taxa_silva_clean[,1] == "Archaea", ])
+## root tree
+TREE <- root(TREE, outgroup = Archea_OTU)
+## resolve polytomies randomly
+TREE <- multi2di(TREE)
+
+#write rooted TREE
+write.tree(TREE, "16S_analysis/Tree.rooted.2di.tre")
+
+system("/Applications/PATHd8/PATHd8 16S_analysis/Tree.rooted.2di.tre 16S_analysis/Tree.um.tre")
+system("grep '^d8 tree' 16S_analysis/Tree.um.tre > 16S_analysis/Tree_bac_um_oT.tre")
+```
+
+
+Let's have a quick look at the tree to see if there are any souspiciously long branches or other anomalies
+
+Also, we will use the `midpoint.root {phytools}` function to root the tree at midpoint. (Throws error, not included for now)
+
+```{r}
+TREE <- read.tree("16S_analysis/Tree.um_oT.tre")
+
+plot(TREE, show.tip.label = FALSE)
 
 ```
 
