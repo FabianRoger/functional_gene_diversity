@@ -18,9 +18,8 @@ library(tidyverse)
 library(car)
 library(broom)
 library(gridExtra)
-
-
-#library(phyloseq)
+library(phyloseq)
+library(DESeq2)
 #library(GGally)
 #library(parallel)
 ```
@@ -911,7 +910,7 @@ grid.arrange(plot_nosz1_proc, plot_nosz2_proc, plot_nifh_proc, nrow=2)
 
 ```{r}
 
-data.frame(Factor = c("Sediment", "Func. gene abund.", "Func. gene div.", "Fac. div.", "Residuals"),
+data.frame(Factor = c("Sediment", "Func. gene abund.", "Func. gene div.", "Bac. div.", "Residuals"),
            nifH.p = signif(Anova(mod_proc_nifh_sqrt, type = 2)$`Pr(>F)`, 2),
            nifH.r = signif(Anova(mod_proc_nifh_sqrt, type = 2)$`Sum Sq`/sum(Anova(mod_proc_nifh_sqrt, type = 2)$`Sum Sq`)*100,2),
            nosZ.I.p = signif(Anova(mod_proc_nosz1, type = 2)$`Pr(>F)`, 2),
@@ -938,3 +937,231 @@ In conclusion:
 + all three models explain only a small fraction of the total variance in process rates (15 - 26%)
 + neither of the factors is strongly and consistently related to variation in process rates
 
+# Community composition
+
+We have seen in the previous analysis that the variation in process rates (nitrogen fixation and denitrification respectively) cannot be well explained by either the abundance or the diversity of functional genes nor general bacterial diversity. There is some tendency for the process rates being different in the different sediments but the evidence is not consistent.
+
+An alternative hypothesis would be that process rates are driven by the presence or the combination of a few key species. As we don't have an *a priori* hypothesis abut **which** species could be important, this data analysis is therefore exploratory. 
+
+We use the DESeq2 package to look for differntially OTUs that are 
+
++ correlated to process rates, controling for sediments. 
++ diffrentialy abundant between the sediments
+
+[Love, M. I., Huber, W., & Anders, S. (2014). Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. Genome Biology, 15(12), 31.)](http://doi.org/10.1186/s13059-014-0550-8)
+
+for the correlation of abundance with process rates with we test the hypthesis that process rate (PR) and the counts (C) are related as in 
+
+$$PR_{func} = 2^{(aC_{funcgen})} $$
+$a$ is the log-fold change of counts with unit process rate. 
+
+We also use the *rlogTransformation* implemented in the DESeq2 package to normalize the OTUtables and cluster the samples. 
+
+## nifH
+
++ reading in data & data wrangling
+```{r}
+OTU_nifh <- read.table("OTU_nifh_clean.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# fix sample names
+rownames(OTU_nifh) <- sub("F", "", rownames(OTU_nifh))
+
+# exluding na samples for functional data to match samles in otu table
+FuncDat <- FuncDat[!is.na(FuncDat$sample),]
+rownames(FuncDat) <- FuncDat$sample
+
+# import phylogenetic tree
+TREE_nifh <- read_tree("TREE_nifh_OTUonly.tre")
+
+```
+
++ we first create a phyloseq object with the otu table, the metadata (the phylogeny is not needed here)
++ we the transform the phyloseq object to a deseq2 object, telling it the experimental design. Here `~sediment + N2_fixation` means that we look for a correlation with N2_fixation, controling for sediment. 
++ we then test the hypothesis using the `DESeq`function. this function does three things: 
+    + estimates the size factors (correcting for sequence depth between samples)
+    + estimates dispersion (obtains dispersion estimates for Negative Binomial distributed data. See `?estimateDispersions` or the reference above for details. We use the the `parametric`option)
+    + GLM fitting and Wald test (tests for significance of coefficients in a Negative Binomial GLM, using previously calculated sizeFactors and dispersion estimates - test for significant $a$ estimates in the formula above)
+    + we also set `minReplicatesForReplace` to `Inf`. As we test of a continious variable, we don't have true biological replicates. 
+    
+### correlation with N2_fixation
+```{r}
+nifH_ps <- phyloseq(otu_table(OTU_nifh, taxa_are_rows = F),
+                    sample_data(FuncDat))
+
+nifH_d2 <- phyloseq_to_deseq2(nifH_ps, ~sediment + N2_fixation)
+
+Sigdiff <- DESeq(nifH_d2, fitType = "parametric", test = "Wald", minReplicatesForReplace = Inf)
+
+res = results(Sigdiff, name = "N2_fixation", cooksCutoff = FALSE)
+alpha = 0.05
+
+sigtab <-  res[with(res, order(padj, pvalue)),]
+sigtab
+
+plotDispEsts(Sigdiff, main = "dispersion estimations")
+plotMA(res, main = "shrunken log2fold changes with unit process rate change")
+```
+
++ if we account for differnce between the sediments, no nifH-OTU is found to be positively (or negatively) correlated with the process rate
+
+### differences between sediments
+
++ we also check whether we can find OTUs that are signifcantly differnt between the four sediments
++ here, we do have true biological replicates, so we keep `minReplicatesForReplace` activated
+
+becasue it turns out that we find a large number of differntially abundant OTUs between teh sediments we try to focus on the most different cases. Therefore we 
+
++ test for OTU's that have greater log-fold-changes then |1| (instead of 0) 
++ set a rigurous p-value cutoff of the adjusted p-value of 0.001
+
+```{r}
+nifH_d2 <- phyloseq_to_deseq2(nifH_ps, ~sediment)
+Sigdiff <- DESeq(nifH_d2, fitType = "parametric", test = "Wald")
+
+
+# get the results for all contratst and store them list
+SedComb <- combn(c("cyano", "ruppia", "sand", "silt"), 2)
+
+alpha = 0.001
+LFC = 1
+
+reslist <- list()
+
+for(i in 1:ncol(SedComb)) {
+res = results(Sigdiff, contrast = c("sediment", SedComb[,i]), cooksCutoff = FALSE, lfcThreshold = LFC)  
+sigtab <- res[res$padj < alpha & !is.na(res$padj),]
+reslist[[i]] <- sigtab
+}
+
+names(reslist) <- paste(SedComb[1, ], SedComb[2,], sep = "_")
+
+diffOTUs <- unique(unlist(lapply(reslist, rownames)))
+
+
+OTU.var.st <- getVarianceStabilizedData(Sigdiff)
+RL <- rlogTransformation(t(OTU_nifh))
+rownames(RL) <- colnames(OTU_nifh)
+
+RL[RL>quantile(c(RL), 0.999)] <- quantile(c(RL), 0.999)
+
+ps <- phyloseq(otu_table(RL[diffOTUs, ], 
+                         taxa_are_rows = T),
+               sample_data(FuncDat))
+
+plot_heatmap(ps, sample.order = FuncDat[with(FuncDat, order(sediment)), ]$sample,
+             sample.label = "sediment", trans = NULL)+
+facet_grid(~sediment, scales = "free")
+
+
+plotMA(res, main = "shrunken log2fold changes with unit process rate change")
+
+
+
+
+res = results(Sigdiff, contrast = c("sediment", "silt", "ruppia"), lfcThreshold =1, cooksCutoff = FALSE)
+alpha = 0.01
+L2C = 2
+sigtab <- res[which(res$padj < alpha), ]
+sigtab <- sigtab[which(sigtab$log2FoldChange < L2C), ]
+
+sigtab <-  sigtab[with(sigtab, order(padj)),]
+sigtab
+
+plotMA(res)+
+abline(1,0,col = "blue")+abline(-1,0, col = "blue")
+```
+
+
+```{r}
+#StD <- getVarianceStabilizedData(Sigdiff)
+RL <- rlogTransformation(t(OTU_nifh))
+
+rownames(RL) <- colnames(OTU_nifh)
+
+PS <- phyloseq(otu_table(assay(RLp), taxa_are_rows = T),
+         phy_tree(TREE_nifh))
+
+UFD <- UniFrac(PS, weighted = TRUE)
+
+
+RLp <- rlogTransformation(nifH_d2)
+
+NMDS <- metaMDS(t(OTU.var.st))
+NMDS <- metaMDS(t(RL))
+NMDS <- metaMDS(UFD)
+
+NMDS$points %>% 
+  data.frame() %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = as.numeric(sample)) %>% 
+  left_join(.,FuncDat) %>% 
+  ggplot(aes(x = MDS1, y =MDS2, colour = sediment))+
+  geom_point()+
+  theme_bw()+
+  ggtitle("nifH gene composition - bray-curtis - rlogTransformed")
+
+```
+
+
+```{r}
+dd <- plotCounts(Sigdiff, gene=c(row.names(sigtab)[1]), intgroup="N2_fixation",
+returnData=TRUE)
+dd$OTU <- row.names(sigtab)[1]
+
+for (i in row.names(sigtab)[-1]) {
+ddt <- plotCounts(Sigdiff, gene=i, intgroup="N2_fixation",
+returnData=TRUE)
+
+ddt$OTU <- i
+
+dd <- rbind(dd,ddt)
+}
+
+left_join(dd, FuncDat) %>% 
+ggplot(aes(y=N2_fixation, x=count, colour = sediment)) +
+  geom_point() +
+  facet_wrap(~OTU)+
+  theme_bw()+
+  scale_x_log10()
+```
+
+
+
+
+```{r}
+OTU_nifh <- decostand(OTU_nifh, "total", 1)*100
+```
+
+max and median relative abundances
+
+```{r, fig.show='hold', fig.width = 5}
+
+apply(OTU_nifh, 2, max) %>% 
+  data.frame() %>% 
+  ggplot( aes(x = `.`))+
+  geom_histogram(binwidth = 0.5, colour = "#c9c9c9", fill = "#98bdd3") +
+  scale_y_sqrt(breaks=seq(0,40,2)^2)+
+  scale_x_continuous(breaks=seq(0,10,0.5))+
+  theme_bw()+
+  ggtitle("maximum relative abundance")
+
+apply(OTU_nifh, 2, median) %>% 
+  data.frame() %>% 
+  ggplot( aes(x = `.`))+
+  geom_histogram(binwidth = 0.005, colour = "#c9c9c9", fill = "#98bdd3") +
+  scale_y_sqrt(breaks=seq(0,40,2)^2)+
+  scale_x_continuous()+
+  theme_bw()+
+  ggtitle("median relative abundance")
+
+apply(OTU_nifh, 2, function(x){sd(x)/mean(x)}) %>% 
+  data.frame() %>% 
+  ggplot( aes(x = `.`))+
+  geom_histogram(binwidth = 0.5, colour = "#c9c9c9", fill = "#98bdd3") +
+  scale_y_sqrt(breaks=seq(0,40,2)^2)+
+  scale_x_continuous()+
+  theme_bw()+
+  ggtitle("cv")
+```
+
+The distribution of maximum and median relative abundance suggests that we can start 
