@@ -1,8 +1,13 @@
 ---
 title: "Diversity estimates"
 output:
-  html_document: default
-  toc: true
+  html_document:
+    toc: yes
+    toc_depth: '4'
+  html_notebook:
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
 ---
 
 ```{r, setup, include=FALSE}
@@ -32,7 +37,7 @@ habitat level 2 to 4, consist of four replicated meta-communities each, and each
 
 There are two missing samples
 
-+ Level 3 - replicate A - habitat cayno
++ Level 3 - replicate A - habitat cyano
 + Level 3 - replicate D - habitat silt
 
 ### import metadata 
@@ -43,9 +48,9 @@ meta <- read_tsv("metadata.txt") %>% filter(season == "summer")
 kable(head(meta))
 ```
 
-# calculating diveristy metrics
 
-# calculate the diversity of nifh genes
+
+#nifH
 
 Read in the relevant files:
 ```{r, cache = TRUE}
@@ -68,28 +73,40 @@ barplot(sort(rowSums(OTU_nifh), decreasing = TRUE), col = "white")
 ```
 
 
-### sample completnes
+### rarefaction
 
 ```{r, cache = TRUE}
-Rarecurves <- rarecurve(OTU_nifh, step = 20)
+# wrapper for `seq` for quadratic spaced sequences
+qseq <- function(from, to, length.out) {seq(sqrt(from), sqrt(to), length.out = length.out)^2}
 
-RareDF <- lapply(Rarecurves, function(x) data.frame(S = unlist(x)))
-names(RareDF) <- row.names(OTU_nifh)
+nifH_rar <- split(OTU_nifh, 1:nrow(OTU_nifh))
 
-RareDF <- do.call("rbind",RareDF )
+RareDF_nifh <- mclapply(nifH_rar, function(x) {
+    m <-  round(qseq(1, ifelse(sum(x) < 15000, sum(x), 15000), length.out = 30))
+    rar <- iNEXT:::Dqhat.Ind(x, q = 1, m)
+    out <- data.frame(m = m, qD = rar)
+    return(out)})
 
-RareDF$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF)))
-RareDF$depth <- as.integer(gsub(".+N(\\d+)", "\\1", row.names(RareDF)))
+names(RareDF_nifh) <- row.names(OTU_nifh)
 
-RareDF %>% 
+RareDF_nifh_df <- do.call("rbind",RareDF_nifh )
+
+RareDF_nifh_df$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF_nifh_df)))
+
+RareDF_nifh_df %>% 
   left_join(meta) %>% 
-  ggplot(aes(x = depth, y = S, colour = sediment))+
+  na.omit() %>% 
+  ggplot(aes(x = m, y = qD, colour = sediment))+
   facet_wrap(~Level * replicate, labeller = label_wrap_gen(multi_line=FALSE))+
   geom_line() +
   theme_bw()+
   scale_color_manual(values = c("green", "darkgreen", "orange", "grey"))+
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))+
+  labs(y = "diversity (q = 1)", x = "sampling depth", title = "rarefaction")
+
 ```
+
+## alpha diversity
 
 ### richness and effective number of species
 
@@ -120,7 +137,7 @@ DIV_effN_nifh <- data.frame(sample = as.numeric(names(CommunityDiversity)),
 
 ```
 
-## calculating the phylogenetic diversity based on effective number of species 
+## phylogenetic diversity
 
 ```{r, cache = TRUE}
 ppTree <- Preprocess.Tree(multi2di(TREE_nifh))
@@ -145,7 +162,7 @@ ggscatmat(DIV_nifh[,2:4])
 ```
 
 
-## calculating gamma diversity
+## gamma diversity
 
 + first we need to create a unique identifier for each *big core* (see schema of experimental design)
 
@@ -178,7 +195,7 @@ in this step we pool the samples from the complete small cores
 
 + For the Level 1 cores we don't need calculate gamma diversity. We only have one pooled measurement per large core as we only have one sediment type in each level 1 core.
 
-+ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogentic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
++ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogenetic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
 
 ```{r, cache = TRUE}
 
@@ -190,6 +207,7 @@ y_DIV_nifh <- data.frame(MC.ID = unique(meta_full[meta_full$Level != 1, ]$MC.ID)
 
 
 for(i in y_DIV_nifh$MC.ID) {
+  
   #extract OTU data from metacommunity i
   OTU_temp <-  OTU_nifh[ which( rownames( OTU_nifh) %in% meta_full[ meta_full$MC.ID == i ,]$sample), ]
   
@@ -218,19 +236,21 @@ write.table(y_DIV_nifh, "DIV_nifh.txt")
 ```
 
 
-# calculate bacterial 16S diversity
+# 16S
 
 Read in the relevant files:
+
 ```{r, cache = TRUE}
 OTU_bac <- read.table("16S_analysis/OTU_bac_clean.txt", header = TRUE, stringsAsFactors = FALSE)
 TREE_bac <- read.tree("16S_analysis/Tree_bac_um_oT.tre")
 ```
 
 + remove "F" preceding sample number in OTU table
-
++ subset form summer sample
 
 ```{r, cache = TRUE}
 dimnames(OTU_bac)[[1]] <- sub("C", "", dimnames(OTU_bac)[[1]])
+OTU_bac <- OTU_bac[row.names(OTU_bac) %in% meta$sample,]
 ```
 
 ### sampling depth 
@@ -241,28 +261,37 @@ barplot(sort(rowSums(OTU_bac), decreasing = TRUE), col = "white")
 ```
 
 
-### sample completnes
+### rarefaction
 
 ```{r, cache = TRUE}
-Rarecurves <- rarecurve(OTU_bac, step = 200)
+bac_rar <-  split(OTU_bac, 1:nrow(OTU_bac))
 
-RareDF <- lapply(Rarecurves, function(x) data.frame(S = unlist(x)))
-names(RareDF) <- row.names(OTU_bac)
+RareDF_bac <- mclapply(bac_rar, function(x) {
+    m <-  round(qseq(1, ifelse(sum(x) < 30000, sum(x), 30000), length.out = 30))
+    rar <- iNEXT:::Dqhat.Ind(x, q = 1, m)
+    out <- data.frame(m = m, qD = rar)
+    return(out)})
 
-RareDF <- do.call("rbind",RareDF )
+names(RareDF_bac) <- row.names(OTU_bac)
 
-RareDF$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF)))
-RareDF$depth <- as.integer(gsub(".+N(\\d+)", "\\1", row.names(RareDF)))
+RareDF_bac_df <- do.call("rbind", RareDF_bac)
 
-RareDF %>% 
+RareDF_bac_df$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF_bac_df)))
+
+RareDF_bac_df %>% 
   left_join(meta) %>% 
-  ggplot(aes(x = depth, y = S, colour = sediment))+
+  na.omit() %>% 
+  ggplot(aes(x = m, y = qD, colour = sediment))+
   facet_wrap(~Level * replicate, labeller = label_wrap_gen(multi_line=FALSE))+
   geom_line() +
   theme_bw()+
   scale_color_manual(values = c("green", "darkgreen", "orange", "grey"))+
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))+
+  labs(y = "diversity (q = 1)", x = "sampling depth", title = "rarefaction")
+
 ```
+
+## alpha diversity
 
 ## richness and effective number of species
 
@@ -326,7 +355,7 @@ in this step we pool the samples from the complete small cores
 
 + For the Level 1 cores we don't need calculate gamma diversity. We only have one pooled measurement per large core as we only have one sediment type in each level 1 core.
 
-+ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogentic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
++ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogenetic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
 
 ```{r, cache = TRUE}
 
@@ -365,9 +394,8 @@ write.table(y_DIV_bac, "DIV_bac.txt")
 
 ```
 
-# calculating nosz diveristy
 
-## noszI
+# nosZ
 
 ### preprocessing nosz files
 
@@ -453,7 +481,7 @@ phlyo_noszII <- phyloseq(otu_table( cbind(OTU_nosz1, OTU_nosz2), taxa_are_rows =
 plot_tree(phlyo_noszII, color = "nosz")
 ```
 
-## calculate the diversity of nosz1 genes
+## nosZ I
 
 ### sampling depth 
 
@@ -463,30 +491,37 @@ barplot(sort(rowSums(OTU_nosz1), decreasing = TRUE), col = "white")
 ```
 
 
-### sample completnes
+### rarefaction
 
 ```{r, cache = TRUE}
-Rarecurves <- rarecurve(OTU_nosz1, step = 20)
+nosz1_rar <-  split(OTU_nosz1, 1:nrow(OTU_nosz2))
 
-RareDF <- lapply(Rarecurves, function(x) data.frame(S = unlist(x)))
-names(RareDF) <- row.names(OTU_nosz1)
+RareDF_nosz1 <- mclapply(nosz1_rar, function(x) {
+    m <-  round(qseq(1, ifelse(sum(x) < 6000, sum(x), 6000), length.out = 30))
+    rar <- iNEXT:::Dqhat.Ind(x, q = 1, m)
+    out <- data.frame(m = m, qD = rar)
+    return(out)})
 
-RareDF <- do.call("rbind",RareDF )
+names(RareDF_nosz1) <- row.names(OTU_nosz1)
 
-RareDF$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF)))
-RareDF$depth <- as.integer(gsub(".+N(\\d+)", "\\1", row.names(RareDF)))
+RareDF_nosz1_df <- do.call("rbind", RareDF_nosz1)
 
-RareDF %>% 
+RareDF_nosz1_df$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF_nosz1_df)))
+
+RareDF_nosz1_df %>% 
   left_join(meta) %>% 
-  ggplot(aes(x = depth, y = S, colour = sediment))+
+  na.omit() %>% 
+  ggplot(aes(x = m, y = qD, colour = sediment))+
   facet_wrap(~Level * replicate, labeller = label_wrap_gen(multi_line=FALSE))+
   geom_line() +
   theme_bw()+
   scale_color_manual(values = c("green", "darkgreen", "orange", "grey"))+
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))+
+  labs(y = "diversity (q = 1)", x = "sampling depth", title = "rarefaction")
 ```
+## alpha diversity
 
-## richness and effective number of species
+### richness and effective number of species
 
 ```{r, cache = TRUE}
 
@@ -515,7 +550,7 @@ DIV_effN_nosz1 <- data.frame(sample = as.numeric(names(CommunityDiversity)),
 
 ```
 
-## calculating the phylogenetic diversity based on effective number of species 
+### phylogenetic diversity
 
 ```{r, cache = TRUE}
 ppTree <- Preprocess.Tree(multi2di(TREE_nosz1))
@@ -540,15 +575,13 @@ ggscatmat(DIV_nosz1[,2:4])
 ```
 
 
-## calculating gamma diversity
-
-### pooling the OTU data
+## gamma diversity
 
 in this step we pool the samples from the complete small cores 
 
 + For the Level 1 cores we don't need calculate gamma diversity. We only have one pooled measurement per large core as we only have one sediment type in each level 1 core.
 
-+ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogentic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
++ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogenetic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
 
 ```{r, cache = TRUE}
 
@@ -587,7 +620,7 @@ write.table(y_DIV_nosz1, "DIV_nosz1.txt")
 
 ```
 
-# nosz II
+## nosZ II
 
 ### sampling depth 
 
@@ -597,30 +630,38 @@ barplot(sort(rowSums(OTU_nosz2), decreasing = TRUE), col = "white")
 ```
 
 
-### sample completnes
+### rarefaction
 
 ```{r, cache = TRUE}
-Rarecurves <- rarecurve(OTU_nosz2, step = 20)
+nosz2_rar <-  split(OTU_nosz2, 1:nrow(OTU_nosz2))
 
-RareDF <- lapply(Rarecurves, function(x) data.frame(S = unlist(x)))
-names(RareDF) <- row.names(OTU_nosz2)
+RareDF_nosz2 <- mclapply(nosz2_rar, function(x) {
+    m <-  round(qseq(1, ifelse(sum(x) < 6000, sum(x), 6000), length.out = 30))
+    rar <- iNEXT:::Dqhat.Ind(x, q = 1, m)
+    out <- data.frame(m = m, qD = rar)
+    return(out)})
 
-RareDF <- do.call("rbind",RareDF )
+names(RareDF_nosz2) <- row.names(OTU_nosz2)
 
-RareDF$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF)))
-RareDF$depth <- as.integer(gsub(".+N(\\d+)", "\\1", row.names(RareDF)))
+RareDF_nosz2_df <- do.call("rbind", RareDF_nosz2)
 
-RareDF %>% 
+RareDF_nosz2_df$sample <- as.numeric(gsub("(\\d+).+", "\\1", row.names(RareDF_nosz2_df)))
+
+RareDF_nosz2_df %>% 
   left_join(meta) %>% 
-  ggplot(aes(x = depth, y = S, colour = sediment))+
+  na.omit() %>% 
+  ggplot(aes(x = m, y = qD, colour = sediment))+
   facet_wrap(~Level * replicate, labeller = label_wrap_gen(multi_line=FALSE))+
   geom_line() +
   theme_bw()+
   scale_color_manual(values = c("green", "darkgreen", "orange", "grey"))+
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))+
+  labs(y = "diversity (q = 1)", x = "sampling depth", title = "rarefaction")
 ```
 
-## richness and effective number of species
+## alpha diversity
+
+### richness and effective number of species
 
 ```{r, cache = TRUE}
 
@@ -649,7 +690,7 @@ DIV_effN_nosz2 <- data.frame(sample = as.numeric(names(CommunityDiversity)),
 
 ```
 
-## calculating the phylogenetic diversity based on effective number of species 
+### phylogenetic diversity 
 
 ```{r, cache = TRUE}
 ppTree <- Preprocess.Tree(multi2di(TREE_nosz2))
@@ -674,15 +715,13 @@ ggscatmat(DIV_nosz2[,2:4])
 ```
 
 
-## calculating gamma diversity
-
-### pooling the OTU data
+## gamma diversity
 
 in this step we pool the samples from the complete small cores 
 
 + For the Level 1 cores we don't need calculate gamma diversity. We only have one pooled measurement per large core as we only have one sediment type in each level 1 core.
 
-+ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogentic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
++ For level 2 to 4, we calculate the gamma richness, effective number of species and phylogenetic diversity as for the small cores but for the metacommunity weighted by the relative abundance of each small core.
 
 ```{r, cache = TRUE}
 
