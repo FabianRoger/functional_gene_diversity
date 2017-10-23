@@ -1,0 +1,1778 @@
+---
+title: "Data_analysis"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, tidy = TRUE, highlight = TRUE, cache = TRUE)
+```
+
+```{r, echo = F, message=FALSE}
+library(scales)
+library(knitr)
+library(broom)
+library(gridExtra)
+library(phyloseq)
+library(DESeq2)
+library(vegan)
+library(readxl)
+library(Biostrings)
+library(cvTools)
+library(tidyverse)
+library(GGally)
+library(cowplot)
+library(genefilter)
+library(car)
+library(ape)
+```
+
+
+read in and join data
+
+```{r}
+meta <- read_tsv("meta_clean.txt")
+
+# Nitrogen fixation data 
+# Unit: µmol Ethen / gram ww Sediment / day
+
+N_func <- read_excel("nitrogenfixation(summerdata)_1.1.xlsx", "final_data") %>% 
+  mutate(N2_fixation = eten_μmol_g_day/3)  #eten to N2
+
+# nifH abundance data
+# Unit: copies per Gramm sediment wet weight
+
+qPCR <- read_excel("DNA data_summer_with_nIfH.xlsx", "final_data") %>% 
+  dplyr::rename(nifH = nifH_cop_g_sediment)
+
+
+# fraction nifH parralogues
+
+Par_frct <- read.table("Fraction_Parallogues_nifh.txt", sep ="\t", 
+                       header = T, stringsAsFactors = FALSE)
+
+
+FuncDat_raw <- 
+  meta %>% 
+  mutate(habitat = ifelse(Level == 1, sediment, "mix")) %>% 
+  select(-habitat) %>% 
+  left_join(N_func) %>% 
+  left_join(qPCR) %>% 
+  left_join(Par_frct) %>% 
+  arrange(Level, replicate, sediment)
+
+
+```
+ 
++ Nitrogen fixation by habitat diversity level
+
+```{r}
+N2 <- 
+FuncDat_raw %>% 
+  ggplot(., aes(Level, N2_fixation, fill = sediment)) +
+  geom_point(shape = 21, position = position_dodge(width = 0.4), size = 3, colour = "grey")+
+  stat_summary(fun.y = function(x) mean(x), geom = "point", aes(group = Level), shape = 23 , size = 4)+
+  stat_smooth(method = "lm", se = F, size = 0.5, colour = "black", aes(group = 1))+
+  theme_classic()+
+  scale_fill_manual(values = c("cyan4", "forestgreen", 
+                               "tan2", "brown4"),
+ guide_legend(title = "", legend.text = ""))+
+  theme(legend.position =  "bottom")+
+  labs(y = expression(N[2]~(µmol~g^-1~d^-1)), 
+                 x = "habitat diversity", 
+                 title = "N2 fixation")
+  
+  N2       
+
+```
+
+We want to know if we can explain the residual variation in N2 fixation that cannot be attributed to habitat diversity. Therefore we first statistically remove the effect of habitat diversity (such that the mean N_2 fixation is the same for all habitat diversity levels). 
+
+```{r}
+FuncDat_raw <- FuncDat_raw %>% 
+  mutate(N2_fixation = resid(lm(N2_fixation ~ Level, data = .))) %>% 
+  mutate(N2_fixation = N2_fixation + abs(min(N2_fixation)))
+
+ResidN2 <- 
+ggplot(FuncDat_raw, aes(x = Level, y = N2_fixation, fill = sediment)) +
+  geom_point(shape = 21, position = position_dodge(width = 0.4), size = 3, colour = "grey")+
+  stat_summary(fun.y = function(x) mean(x), geom = "point", aes(group = Level), shape = 23 , size = 4)+
+  stat_smooth(method = "lm", se = F, size = 0.5, colour = "black", aes(group = 1))+
+  theme_classic()+
+  scale_fill_manual(values = c("cyan4", "forestgreen", 
+                               "tan2", "brown4"),
+                    guide = guide_legend(override.aes = 
+                                           list(color = "white",
+                                                fill = "white")))+
+  theme(legend.position = "bottom",
+        legend.text = element_text(color = "white"),
+        legend.title = element_text(color = "white"),
+        legend.key = element_rect(fill = "white",colour = "white"))+ 
+  labs(y = expression(residual~N[2]~fixation~(µmol~g^-1~d^-1)),
+                      x = "habitat diversity", 
+       title = "residual N2 fixation")
+
+ResidN2
+```
+
+```{r}
+Figure_S4 <- arrangeGrob(N2, ResidN2, nrow = 1) 
+
+ggsave("Figure_S4.png", Figure_S4, width = 6, height = 3)
+ggsave("Figure_S4.pdf", Figure_S4, width = 6, height = 3)
+
+plot(Figure_S4)
+
+```
+
+
+#nifH data from Andersson et al 2014
+
+Andersson, B., Sundbäck, K., Hellman, M., Hallin, S., & Alsterberg, C. (2014). Nitrogen fixation in shallow-water sediments: Spatial distribution and controlling factors. Limnology and Oceanography, 59(6), 1932–1944. http://doi.org/10.4319/lo.2014.59.6.1932
+
+
+```{r}
+# Nitrogen fixation is in *µmol Ethylen x gram^-1 w/w sed. x day^-1*
+# nifH abundance is in *copies nifH x mili-gram^-1 w/w sed.*
+
+Andersson <- read_excel("Andersson_Björn_nifH.xlsx",sheet = "final_data")
+
+Andersson <- 
+  Andersson[,c(1:3)] %>% 
+    mutate(N2_fixation = NA_ymol_gws_d/3) %>%  #  Ethen to N2
+    mutate(nifH = nifH_kopior_mg_ww * 1000) %>% # mg to gram   
+    na.omit()
+
+# we make the correlatin in log -log   
+Andersson_log10 <-  mutate_at(Andersson, vars(nifH, N2_fixation), log)
+  
+mod_nifH_And <- lm(N2_fixation ~ nifH, Andersson_log10)
+
+PRED_PI_A <- 
+predict(mod_nifH_And, data = Andersson, interval = "predict", type = "response") %>% 
+  data.frame %>% 
+  mutate_all(function(x) exp(x)) %>% 
+  mutate(nifH = Andersson$nifH) 
+
+PRED_CI_A <- 
+predict(mod_nifH_And, data = Andersson, interval = "confidence", type = "response") %>% 
+  data.frame %>% 
+  mutate_all(function(x) exp(x)) %>% 
+  mutate(nifH = Andersson$nifH) 
+
+Andersson_plot <- 
+ggplot(Andersson)+
+  geom_point(aes(x = nifH, y = N2_fixation), shape = 21, size = 2, colour = "black", fill = "#377eb8")+
+  geom_ribbon(data = PRED_PI_A, aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.1)+
+ geom_ribbon(data = PRED_CI_A, aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.3)+
+  geom_line(data = PRED_PI_A, aes(x = nifH, y = fit))+
+  theme_bw()+
+  scale_y_log10()+
+  scale_x_log10(breaks = 10^seq(0,15,1))+
+  labs(y = expression(N[2]~(µmol~g^-1~d^-1)),
+       x = expression(nifH~(copies~g^-1)))
+
+Andersson_plot
+```
+
+
++ comparing the range of values for nifH abundance and N2 fixation from Andersson et al and Alsterberg et al
+
+```{r}
+DF_comp <- data.frame(Exp = rep(c(rep("Alsterberg", nrow(FuncDat_raw)), rep("Andersson", nrow(Andersson))), 2))
+
+DF_comp$Var <- rep(c("nifH", "Nfix"), each = nrow(DF_comp)/2)
+
+DF_comp$Val <- c(c(FuncDat_raw$nifH, Andersson$nifH), c(FuncDat_raw$N2_fixation, Andersson$N2_fixation))
+
+DF_comp$Var <- factor(DF_comp$Var, levels = c("nifH", "Nfix"))
+
+ggplot(DF_comp,  aes(x = Val, fill = Exp))+
+  geom_histogram(alpha = 0.6, position = "identity")+
+  facet_wrap(~Var, scales = "free_x")+
+  scale_x_log10()+
+  theme_bw()+
+  scale_fill_manual(values = c("#a50f15", "#377eb8"))
+
+```
+
+
+
+#predicting N2_fixation in our data 
+
+Here we take the model fitted to the data from Andersson et al and attempt to predict nitrogen fixation on our data
+
+```{r}
+
+Pred_Nfix <- 
+FuncDat_raw %>%
+  select(nifH, N2_fixation) %>% 
+  mutate_all(log) %>% 
+  predict(mod_nifH_And, newdata = ., interval= "prediction", type = "response") %>% 
+  as.data.frame() %>% 
+  mutate_all(function(x) exp(x)) %>% 
+  cbind(select(FuncDat_raw, nifH, N2_fixation))
+
+  
+Alsterberg_plot <- 
+ggplot(Pred_Nfix)+
+  geom_point(aes(x = nifH, y = N2_fixation), 
+             shape = 21, size = 2, colour = "black", fill = "#377eb8")+
+  geom_ribbon( aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.1)+
+  geom_line(aes(x = nifH, y = fit))+
+ # geom_hline(aes(x = nifH, yintercept =  mean(N2_fixation)), size = 0.3)+
+  geom_hline(aes(x = nifH, yintercept =  exp(mean(log(N2_fixation)))), size = 0.3)+
+  theme_classic()+
+  scale_y_log10()+
+  scale_x_log10(breaks = 10^seq(0,10,1))+
+  labs(y = expression(N[2]~(µmol~g^-1~d^-1)),
+       x = expression(nifH~(copies~g^-1)))
+
+Alsterberg_plot
+
+```
+
+
+
+
+```{r}
+
+
+Figure_1 <- 
+Andersson %>% 
+  select(N2_fixation) %>% 
+  cbind(PRED_PI_A) %>% 
+  mutate(Exp = "Andersson") %>% 
+  rbind(., mutate(Pred_Nfix, Exp = "Alsterberg")) %>% 
+  mutate(Exp = factor(Exp, levels = c("Andersson", "Alsterberg"),
+                      labels = c("Andersson et al.",
+                                 "Alsterberg et al."))) %>% 
+  filter(N2_fixation > 0) %>% 
+  group_by(Exp) %>% 
+  mutate(Mean = exp(mean(log(N2_fixation)))) %>% 
+  ggplot(., aes(x = nifH, y = N2_fixation, fill = Exp))+
+  geom_point(shape = 21, size = 2, colour = "black")+
+  geom_ribbon( aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.1, fill = "black")+
+  geom_line(aes(x = nifH, y = fit))+
+  geom_line(aes(x = nifH, y = Mean), size = 0.3, linetype = "dashed")+
+  facet_wrap(~Exp)+
+  geom_text(data = data.frame(Exp = c("Andersson et al.",
+                                      "Alsterberg et al."),
+                              x = 10^5, y = 10^-0.5,
+                              label = c("a", "b")), 
+            aes(x = x, y=y, label = label), fontface = "bold")+
+  scale_x_log10(
+        breaks = trans_breaks("log10", function(x) 10^x),
+        labels = trans_format("log10", math_format(10^.x)))+
+  scale_y_log10(
+        breaks = trans_breaks("log10", function(x) 10^x),
+       labels = trans_format("log10", math_format(10^.x)))+
+  scale_fill_manual(values = c( "#377eb8", "#a50f15"))+
+  labs(x = expression(nifH~(copies~g^-1)),
+       y = expression(N[2]~(µmol~g^-1~d^-1)),
+       fill = "Study")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+ggsave("Figure_1.pdf", plot = Figure_1, width = 7, height = 4)
+ggsave("Figure_1.jpeg", plot = Figure_1, width = 7, height = 4)
+
+Figure_1
+```
+
+## In range prediction
+
+The prediction above used the full range of values for both the Andersson et al and the Alsterberg et al dataset. Yet, this implies out-of-range prediction as the lowest nifH copie numbers observed in Andersson et al are lower than for Andersson et al. Furthermore the shape of the relationship in the data in Andersson et al could be different if we only consider the range of data covered by Alsterberg et al. As a more conservative test of the predictive ability of nifH copie numbers and the transferrability across datasets, we fitt the model and predict with only the shared range of nifH copie numbers.
+
+```{r}
+select(Andersson, N2_fixation, nifH) %>% 
+  mutate(DF = "Andersson") %>% 
+  rbind(mutate( select( FuncDat_raw, N2_fixation, nifH), DF = "Alsterberg")) %>% 
+  mutate(Range = NA) %>% 
+  mutate(Range = ifelse(nifH >= min(Andersson$nifH), "yes", "no")) %>% 
+  mutate(Range = ifelse(nifH > max(FuncDat_raw$nifH), "no", Range)) %>% 
+  ggplot(aes(x = nifH, y = N2_fixation, fill = DF, alpha = Range))+
+  geom_point(shape = 21, size = 2)+
+  scale_x_log10()+
+  scale_y_log10()+
+  theme_bw()+
+  scale_fill_manual(values = c("#a50f15", "#377eb8"))+
+  scale_alpha_manual(values = c(0.4, 1))+
+  labs(title = "common range of nifH copie numbers")
+```
+
+
+```{r}
+#truncate Andersson et al data to range observed values in Alsterberg et al
+Andersson_range <- filter(Andersson, nifH <= max(FuncDat_raw$nifH))
+
+# we make the correlation in log - log   
+Andersson_range_log <-  mutate_at(Andersson_range, vars(nifH, N2_fixation), log)
+
+mod_nifH_And_range <- lm(N2_fixation ~ nifH, Andersson_range_log)
+
+summary(mod_nifH_And_range)
+```
+
+the model for the truncated range is still significant (p =  0.007) but the goodness of fits drops down to 15%
+(R-square = 0.155)
+
+```{r}
+PRED_PI_A_range <- 
+predict(mod_nifH_And_range, data = Andersson_range, interval = "predict", type = "response") %>% 
+  data.frame %>% 
+  mutate_all(function(x) exp(x)) %>% 
+  mutate(nifH = Andersson_range$nifH) 
+
+PRED_CI_A_range <- 
+predict(mod_nifH_And_range, data = Andersson_range, interval = "confidence", type = "response") %>% 
+  data.frame %>% 
+  mutate_all(function(x) exp(x)) %>% 
+  mutate(nifH = Andersson_range$nifH) 
+
+Andersson_plot_range <- 
+ggplot(Andersson_range)+
+  geom_point(aes(x = nifH, y = N2_fixation), shape = 21, size = 2, colour = "black", fill = "#377eb8")+
+  geom_ribbon(data = PRED_PI_A_range, aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.1)+
+ geom_ribbon(data = PRED_CI_A_range, aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.3)+
+  geom_line(data = PRED_PI_A_range, aes(x = nifH, y = fit))+
+  theme_bw()+
+  scale_y_log10()+
+  scale_x_log10(breaks = 10^seq(0,15,1))+
+  labs(y = expression(N[2]~(µmol~g^-1~d^-1)),
+       x = expression(nifH~(copies~g^-1)))
+
+Andersson_plot_range
+```
+
+
+```{r}
+
+Pred_Nfix_range <- 
+FuncDat_raw %>%
+  select(nifH, N2_fixation) %>% 
+  filter(nifH >= min(Andersson_range$nifH)) %>% 
+  mutate_all(log) %>% 
+  predict(mod_nifH_And_range, newdata = ., interval= "prediction", type = "response") %>% 
+  as.data.frame() %>% 
+  mutate_all(function(x) exp(x)) %>% 
+  cbind(select(filter(FuncDat_raw, nifH >= min(Andersson_range$nifH)),
+               nifH, N2_fixation))
+
+  
+Alsterberg_plot_range <- 
+ggplot(Pred_Nfix_range)+
+  geom_point(aes(x = nifH, y = N2_fixation), 
+             shape = 21, size = 2, colour = "black", fill = "#377eb8")+
+  geom_ribbon( aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.1)+
+  geom_line(aes(x = nifH, y = fit))+
+ # geom_hline(aes(x = nifH, yintercept =  mean(N2_fixation)), size = 0.3)+
+  geom_hline(aes(x = nifH, yintercept =  exp(mean(log(N2_fixation)))), size = 0.3)+
+  theme_classic()+
+  scale_y_log10()+
+  scale_x_log10(breaks = 10^seq(0,10,1))+
+  labs(y = expression(N[2]~(µmol~g^-1~d^-1)),
+       x = expression(nifH~(copies~g^-1)))
+
+Alsterberg_plot_range
+
+```
+
+```{r}
+
+
+#Figure_1 <- 
+Andersson_range %>% 
+  select(N2_fixation) %>% 
+  cbind(PRED_PI_A_range) %>% 
+  mutate(Exp = "Andersson") %>% 
+  rbind(., mutate(Pred_Nfix_range, Exp = "Alsterberg")) %>% 
+  mutate(Exp = factor(Exp, levels = c("Andersson", "Alsterberg"),
+                      labels = c("Andersson et al.",
+                                 "Alsterberg et al."))) %>% 
+  filter(N2_fixation > 0) %>% 
+  group_by(Exp) %>% 
+  mutate(Mean = exp(mean(log(N2_fixation)))) %>%
+  ggplot(., aes(x = nifH, y = N2_fixation, fill = Exp))+
+  geom_point(shape = 21, size = 2, colour = "black")+
+  geom_ribbon( aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.1, fill = "black")+
+  geom_line(aes(x = nifH, y = fit))+
+  geom_line(aes(x = nifH, y = Mean), size = 0.3, linetype = "dashed")+
+  facet_wrap(~Exp)+
+  geom_text(data = data.frame(Exp = c("Andersson et al.",
+                                      "Alsterberg et al."),
+                              x = 10^5, y = 10^-0.5,
+                              label = c("a", "b")), 
+            aes(x = x, y=y, label = label), fontface = "bold")+
+  scale_x_log10(
+        breaks = trans_breaks("log10", function(x) 10^x),
+        labels = trans_format("log10", math_format(10^.x)))+
+  scale_y_log10(
+        breaks = trans_breaks("log10", function(x) 10^x),
+       labels = trans_format("log10", math_format(10^.x)))+
+  scale_fill_manual(values = c( "#377eb8", "#a50f15"))+
+  labs(x = expression(nifH~(copies~g^-1)),
+       y = expression(N[2]~(µmol~g^-1~d^-1)),
+       fill = "Study")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+#ggsave("Figure_1.pdf", plot = Figure_1, width = 7, height = 4)
+#ggsave("Figure_1.jpeg", plot = Figure_1, width = 7, height = 4)
+
+#Figure_1
+```
+
+
++ prediction statistics
+
+```{r}
+
+# RMSE for Alsterberg et al - predicted by Andersson et al model
+rmspe(Pred_Nfix$N2_fixation, Pred_Nfix$fit)
+
+# RSME for Alsterberg et al - predicted by mean
+rmspe(Pred_Nfix$N2_fixation, mean(Pred_Nfix$N2_fixation))
+
+# RMSE for Alsterberg et al - predicted by Andersson et al model - common range
+rmspe(Pred_Nfix_range$N2_fixation, Pred_Nfix_range$fit)
+
+# RSME for Alsterberg et al - predicted by mean - common range
+rmspe(Pred_Nfix_range$N2_fixation, mean(Pred_Nfix_range$N2_fixation))
+
+
+```
+
+# Hypothesis 1
+
+How much of the variation in process rate can we predict with community metrics
+
++ 16S diversity 
++ nif_h diversity
++ nif_h abundance
+(+ fraction cyanobacterial nifH genes)
++ habitat type
+
+below I show the distribution of the *predictor* variables in the four sediment types.
+
+
+```{r, fig.width=6}
+DIV <- read.table("Diversity_estimations.txt")
+
+FuncDat_raw <- 
+  DIV %>%
+  select(-contains("S_")) %>% 
+  select(-contains("y_")) %>% 
+  na.omit() %>% 
+  left_join(FuncDat_raw) %>%
+  select(-contains("phylo"), -contains("nosz")) %>% 
+  select(-MC.ID, -replicate, -season, -weight)
+
+
+FuncDat <- FuncDat_raw %>% 
+  mutate(corr_nifH = nifH * (1 - frct.par))
+
+FuncDat %>% 
+  select(effN_nifh, effN_bac, corr_nifH, sediment) %>% 
+  ggpairs(aes(colour = sediment))
+  
+  
+  
+```
+
+### regression diag
+
+```{r}
+
+gg_diag <- function(x) {
+  FF <- augment(x)
+  p1 <- 
+    ggplot(FF, aes(.fitted, .resid))+
+    geom_point() +
+    geom_hline(yintercept=0, col="red", linetype="dashed")+
+    stat_smooth(method = "loess", se = F, size = 0.5)+
+    theme_bw(base_size = 8)+
+    labs(x = "Fitted values", y = "Residuals", title = "residual against fitted")
+    
+  p2 <- 
+    ggplot(FF, aes(sample = .std.resid))+
+    geom_point(stat = "qq")+
+    labs(x = "Theoretical Quantiles", y = "Standardized Residuals", title = "Normal Q-Q")+
+    theme_bw(base_size = 8)
+  
+  p3 <- 
+    ggplot(FF, aes(.fitted, sqrt(abs(.std.resid))))+
+    geom_point(na.rm=TRUE)+
+    geom_hline(aes(yintercept = mean(sqrt(abs(.std.resid)))), col="red", linetype="dashed")+
+    stat_smooth(method = "loess", se = F, size = 0.5)+
+    labs(y =(expression(sqrt("|Standardized residuals|"))),
+         title = paste("ncvTest: p = ", signif(ncvTest(x)$p, 2), sep = ""))+
+    theme_bw(base_size = 8)
+    
+    
+  p4 <-  
+    ggplot(FF, aes(x =  .resid))+
+    geom_histogram(bins = 10, aes(y=..density..,), fill = "white", colour = "black")+
+    stat_function(
+    fun = function(x, n, bw){ 
+      dnorm(x = x, mean = mean(x), sd = sd(x)) }, colour = "red") +
+    labs(title = paste("Shapiro-Wilk: p = ", signif(tidy(shapiro.test(residuals(x)))$p.value, 2)), sep = "")+
+    theme_bw(base_size = 8)
+  
+  grid.arrange(p1, p2, p3, p4) }
+  
+
+```
+
+### regression effN_bac
+```{r}
+
+mod_16Sdiv <-  lm(sqrt(N2_fixation) ~ effN_bac, FuncDat)
+
+mod_16S_g <- mod_16Sdiv %>% glance
+
+gg_diag(mod_16Sdiv)
+
+plot_16Sdiv <-
+  ggplot(FuncDat_raw)+
+  geom_point(aes(x = effN_bac, y = N2_fixation,
+                 fill = sediment, shape = sediment), 
+             colour = "black", size = 3, alpha = 0.8)+
+  geom_segment(aes(x = min(effN_bac), 
+                   xend = max(effN_bac), 
+                   y = mean(N2_fixation),
+                   yend = mean(N2_fixation)),
+               colour = "grey", linetype = "dashed")+
+  annotate("label", x = 0.7 * max(FuncDat$effN_bac), y = 0.12,  
+           label.size = 0,
+           label = paste("bacterial diversity",
+                         paste("p", round(mod_16S_g$p.value, 2)), sep= "\n"),
+           alpha = 0.5)+
+  theme_bw(base_size = 12)+
+  labs(x = "effective number of bacterial otus",
+       y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))+
+  #scale_y_continuous(limits = c(-13,55))+
+  scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
+  scale_x_continuous(limits = c(0,NA))+
+  theme(legend.position = "none")+
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
+  scale_shape_manual(values = c(21:24))
+
+
+
+plot_16Sdiv
+
+
+```
+
+### regression effN_nifh
+```{r}
+
+mod_nifh <-  lm(sqrt(N2_fixation) ~ effN_nifh, FuncDat)
+
+mod_nifh_g <- mod_nifh %>% glance
+
+gg_diag(mod_nifh)
+
+plot_nifh <-
+  ggplot(FuncDat_raw)+
+  geom_point(aes(x = effN_nifh, y = N2_fixation, 
+                 fill = sediment, shape = sediment), 
+             colour = "black", size = 3, alpha = 0.8)+
+  geom_segment(aes(x = min(effN_nifh), 
+                   xend = max(effN_nifh), 
+                   y = mean(N2_fixation),
+                   yend = mean(N2_fixation)),
+               colour = "grey", linetype = "dashed")+
+  annotate("label", x = 0.7 * max(FuncDat$effN_nifh), y = 0.12, 
+           label.size = 0,
+           label = paste("nifH diversity",
+                         paste("p", round(mod_nifh_g$p.value, 2)), sep= "\n"),
+                         alpha = 0.5)+
+  theme_bw(base_size = 12)+
+  labs(x = "effective number of nifH otus", 
+       y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))+
+  #scale_y_continuous(limits = c(-13,55))+
+  scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
+  scale_x_continuous(limits = c(0,NA))+
+  theme(legend.position = "none")+
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
+  scale_shape_manual(values = c(21:24))
+
+
+plot_nifh
+
+```
+
+### regression corr_nifH
+```{r}
+
+mod_nifH_ab <-  lm(sqrt(N2_fixation) ~ corr_nifH, FuncDat)
+
+mod_nifH_ab_g <- mod_nifH_ab %>% glance
+
+gg_diag(mod_nifH_ab)
+
+plot_nifH_ab  <-
+  ggplot(FuncDat)+
+  geom_point(aes(x = corr_nifH, y = N2_fixation, 
+                 fill = sediment, shape = sediment), 
+              colour = "black", size = 3, alpha = 0.8)+
+  geom_segment(aes(x = min(corr_nifH), 
+                   xend = max(corr_nifH), 
+                   y = mean(N2_fixation),
+                   yend = mean(N2_fixation)),
+               colour = "grey", linetype = "dashed")+
+  annotate("label", x = 0.7 * max(FuncDat$corr_nifH), y = 0.12, 
+           label.size = 0,
+           label = paste("corrected nifH abundance",
+                         paste("p", round(mod_nifH_ab_g$p.value, 2)),
+                         sep= "\n"),
+                         alpha = 0.5)+
+  theme_bw(base_size = 12)+
+  labs(x = expression(nifH~(copies~g^-1)),
+       y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))+
+  #scale_y_continuous(limits = c(-13,55))+
+  scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
+  scale_x_continuous(limits = c(0,NA))+
+  theme(legend.position = "none")+
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
+  scale_shape_manual(values = c(21:24))
+
+
+plot_nifH_ab
+
+```
+
+### regression sediment
+```{r}
+
+mod_hab <-  lm(sqrt(N2_fixation) ~ sediment, FuncDat)
+
+mod_hab_g <- mod_hab %>% glance
+
+gg_diag(mod_hab)
+
+Pred <- predict(mod_hab, interval = "confidence", type = "response") %>% 
+  data.frame() %>% 
+  mutate_all(function(x) x^2) %>% 
+  mutate(sediment = FuncDat$sediment) %>% 
+  group_by(sediment) %>% 
+  summarise_all(mean) 
+
+plot_hab <-
+  ggplot(FuncDat)+
+  geom_point(aes(x = sediment, y = N2_fixation, 
+                 fill = sediment, shape = sediment), 
+              colour = "black", size = 3, alpha = 0.8,
+             position = position_jitter(width = 0.1))+
+  geom_crossbar(data = Pred, aes(x = sediment, 
+                                 y = fit, 
+                                 ymin = lwr,
+                                 ymax = upr),
+                alpha = 0.3, width = 0.3, fill = "grey", size = 0.1)+
+  annotate("label", x = 3.5, y = 0.12, 
+           label.size = 0,
+           label = paste("sediment types","\n",
+                         paste("R2", round(mod_hab_g$r.squared, 2))," ; ",
+                         paste("p", round(mod_hab_g$p.value, 3)), sep = ""),
+                         alpha = 0.7)+
+  theme_bw(base_size = 12)+
+  labs(x = "sediment types",
+       y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))+
+  #scale_y_continuous(limits = c(-13,55))+
+  scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
+  theme(legend.position = "none")+
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
+  scale_shape_manual(values = c(21:24))
+
+
+
+plot_hab
+
+
+
+```
+
+### regressions
+```{r, fig.width= 6, fig.height=4.5}
+Figure_2 <- plot_grid(plot_16Sdiv, plot_nifh, plot_nifH_ab,  plot_hab,
+                        align = "hv", labels="auto") 
+                        
+plot(Figure_2)
+
+ggsave("Figure_2.pdf", plot = Figure_2, width = 8, height = 6)
+ggsave("Figure_2.jpeg", plot = Figure_2, width = 8, height = 6)
+```
+
+### full Model
+### nifH
+
+```{r}
+mod_full <- lm(sqrt(N2_fixation) ~ sediment + corr_nifH + effN_nifh + effN_bac, data = FuncDat)
+
+gg_diag(mod_full)
+
+```
+
+
+#### Results
+```{r}
+
+# Type II sum of squares testing the main effects (we don't include interactions)
+car::Anova(mod_full, type = 2)
+
+#mod_full %>% tidy %>% mutate_if(is.numeric, function(x) round(x,2)) %>%  kable
+
+mod_full %>% glance %>% mutate_all(function(x) round(x,2)) %>%  kable
+
+```
+
+
+# Community composition
+
+We have seen in the previous analysis that the nitrogen fixation rates cannot be well explained by either the abundance or the diversity of functional genes nor general bacterial diversity. However, the process rates differ in the different sediments.
+
+An alternative hypothesis would be that process rates are driven by the presence or the combination of a few key species. As we don't have an *a priori* hypothesis abut **which** species could be important, this data analysis is exploratory. 
+
+We use the DESeq2 package to look for differntially abundant OTUs that are:
+
++ Correlated to process rates, controling for sediments. 
++ Diffrentialy abundant between the sediments.
+
+[Love, M. I., Huber, W., & Anders, S. (2014). Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2. Genome Biology, 15(12), 31.)](http://doi.org/10.1186/s13059-014-0550-8)
+
+For the correlation of abundance with process rates with we test the hypthesis that process rate (PR) and the counts (C) are related as in
+
+$$PR_{func} = 2^{(aC_{funcgen})} $$
+$a$ is the log-fold change of counts with unit process rate. 
+
+We also use the *rlogTransformation* implemented in the DESeq2 package to normalize the OTUtables and cluster the samples. 
+
+## nifH
+
++ Reading in data & data wrangling.
+```{r}
+OTU_nifh <- read.table("OTU_nifh_clean.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+# Fix sample names
+rownames(OTU_nifh) <- sub("F", "", rownames(OTU_nifh))
+
+# Exluding NA samples for functional data to match samles in OTU table
+FuncDat <- FuncDat[!is.na(FuncDat$sample),]
+rownames(FuncDat) <- FuncDat$sample
+
+# read tree
+TREE_nif <- read.tree("TREE_nifh_um_oT.tre")
+  
+
+```
+
++ We first create a phyloseq object with the otu table and the metadata (the phylogeny is not needed here).
++ We then transform the phyloseq object to a deseq2 object, telling it the experimental design. Here `~sediment + N2_fixation` means that we look for a correlation with N2_fixation, controling for sediment. 
++ We then test the hypothesis using the `DESeq`function. this function does three things: 
+    + Estimates the size factors (correcting for sequence depth between samples).
+    + Estimates dispersion (obtains dispersion estimates for Negative Binomial distributed data. See `?estimateDispersions` or the reference above for details. We use the the `parametric`option).
+    + GLM fitting and Wald test (tests for significance of coefficients in a Negative Binomial GLM, using previously calculated sizeFactors and dispersion estimates - test for significant $a$ estimates in the formula above).
+    + We also set `minReplicatesForReplace` to `Inf`. As we test of a continious variable, we don't have true biological replicates. 
+    
+### Correlation with N2_fixation
+
+### Venn diagram of OTUs
+```{r}
+
+library(VennDiagram)
+
+ # maybe logtransform N2_fixation?    ##########
+
+nifH_ps <- phyloseq(otu_table(OTU_nifh, taxa_are_rows = F),
+                    sample_data(FuncDat),
+                    phy_tree(TREE_nif))
+
+nifH_mS <- merge_samples(nifH_ps, "sediment", fun=sum)
+
+nifH_mS_d2 <- phyloseq_to_deseq2(nifH_mS, ~ 1)
+
+nifH_mS_vst <- t(assay(varianceStabilizingTransformation(nifH_mS_d2, blind = T)))
+nifH_mS_vst[nifH_mS_vst < 0] <- 0
+nifH_mS_vst[nifH_mS_vst > 0] <- 1
+
+Area_names <- c()
+
+for(i in 1:4){
+  name_combinations <- combn(rownames(nifH_mS_vst), i)
+  pasted_name <- apply(name_combinations, 2, function(x) paste(x, collapse = "_"))
+  Area_names <- c(Area_names, pasted_name)
+}
+
+Area_Ns <- vector("list", length(Area_names))
+names(Area_Ns) <- Area_names
+
+for (i in seq_along(Area_Ns)){
+  nif_sub <- nifH_mS_vst[sapply(row.names(nifH_mS_vst), 
+                                function(x) grepl(x, Area_names[i])), , drop=FALSE]
+  
+  Area_Ns[[i]] <- sum(colSums(nif_sub) == nrow(nif_sub))
+  
+}
+
+pdf("nifH_Venn.pdf")
+
+draw.quad.venn(
+	area1 = Area_Ns$cyano,
+	area2 = Area_Ns$ruppia,
+	area3 = Area_Ns$sand,
+	area4 = Area_Ns$silt,
+	n12 = Area_Ns$cyano_ruppia,
+	n13 = Area_Ns$cyano_sand,
+	n14 = Area_Ns$cyano_silt,
+	n23 = Area_Ns$ruppia_sand,
+	n24 = Area_Ns$ruppia_silt,
+	n34 = Area_Ns$sand_silt,
+	n123 = Area_Ns$cyano_ruppia_sand,
+	n124 = Area_Ns$cyano_ruppia_silt,
+	n134 = Area_Ns$cyano_sand_silt,
+	n234 = Area_Ns$ruppia_sand_silt,
+	n1234 = Area_Ns$cyano_ruppia_sand_silt,
+	category = c("cyano", "ruppia", "sand", "silt"),
+	fill = c("cyan4", "forestgreen", "tan2", "brown4"),
+	lty = "dashed",
+	cex = 2,
+	cat.cex = 2,
+	cat.col = c("cyan4", "forestgreen", "tan2", "brown4"))
+
+dev.off()
+```
+
+### DE with sediments 
+```{r}
+#filter low abundant and prevalant counts
+#nifH_ps <- filter_taxa(nifH_ps, kOverA(3, 20), prune=TRUE)
+
+#nifH_glom <- tip_glom(nifH_ps, h = 0.2)
+
+
+nifH_d2 <- phyloseq_to_deseq2(nifH_ps, ~ sediment + sediment * N2_fixation)
+
+Sigdiff_nif <- DESeq(nifH_d2, fitType = "parametric", test = "Wald",
+                     minReplicatesForReplace = Inf, betaPrior = FALSE)
+
+
+resultsNames(Sigdiff_nif)
+res_nif <-  results(Sigdiff_nif,  
+                    #contrast=c("sediment","ruppia","cyano"), 
+                    #name = "sedimentsilt.N2_fixation",
+                    name = "N2_fixation",
+                    cooksCutoff = FALSE, tidy =F) 
+
+summary(res_nif)
+
+
+
+res_nif %>% 
+  as.data.frame() %>% 
+  filter(! is.na(pvalue)) %>% 
+ggplot(., aes(x = pvalue))+
+  geom_histogram(bins = 100)
+
+d <- plotCounts(nifH_d2, gene= slice(res_nif,which.min(padj))$row, 
+                intgroup=c("N2_fixation", "sediment"),
+                returnData=TRUE)
+
+d %>% 
+  ggplot(., aes(x=sediment, y=count, colour = sediment)) + 
+  geom_point()+
+  scale_y_log10()+
+  stat_smooth(method = "lm", se = F)+
+  labs(title = slice(res_nif,which.min(padj))$row)
+
+sigtab_nif <- res_nif[res_nif$padj < 0.05 & ! is.na(res_nif$padj),]
+sigtab_nif[with(sigtab_nif, order(padj)),]
+
+plotDispEsts(Sigdiff_nif, main = "dispersion estimations")
+plotMA(res_nif, alpha = 0.01,
+       main = "shrunken log2fold changes with unit process rate change")
+
+```
+
++ If we account for differnce between the sediments, no OTU correlates with Nitrogen fixation. This means that no OTU is significantly correlated with N2 fixation across all sediments
+
+As a weeker test, we can also split the data by sediment and see if any OTU is significantly correlated to N2 fixation within sediment type
+
+### per habitat
+
+```{r}
+
+Res_list <-  list()
+Res_list2 <- list()
+
+for (i in unique(FuncDat$sediment)){
+  
+  OTU_sed <- OTU_nifh[rownames(OTU_nifh) %in% 
+                       FuncDat[FuncDat$sediment == i,]$sample, ]
+  
+  nifH_sed <- phyloseq(otu_table(OTU_sed, taxa_are_rows = F),
+                    sample_data(FuncDat))
+  
+  nifH_sed <- filter_taxa(nifH_sed, kOverA(2, 10), prune=TRUE)
+  
+  nifH_d2_sed <- phyloseq_to_deseq2(nifH_sed, ~ N2_fixation)
+
+  Sigdiff_nif_sed <- DESeq(nifH_d2_sed, fitType = "parametric", test = "Wald", minReplicatesForReplace = Inf, betaPrior = FALSE)
+  
+  res_nif_Sed = results(Sigdiff_nif_sed, name = "N2_fixation", cooksCutoff = FALSE,
+                        independentFiltering = FALSE, tidy = T) %>% 
+    mutate(sediment = i)
+  
+ # sigtab_nif <- res_nif_Sed[res_nif_Sed$padj < 0.05 & ! is.na(res_nif_Sed$padj),]
+  
+  Res_list[[i]] <- res_nif_Sed
+  
+    
+ #   Res2 <- assay(
+#    varianceStabilizingTransformation(Sigdiff_nif_sed,blind =T)
+#    )[row.names(sigtab_nif),]
+    
+#    if(is.null(nrow(Res2))) {
+#      Res2 <- t(data.frame(OTU = Res2))
+ #     row.names(Res2) <- row.names(sigtab_nif)
+  #  }
+    
+  # Res_list2[[i]] <- Res2
+    
+  
+}
+
+Res_nifH <- bind_rows(Res_list) %>% 
+  filter(! is.na(pvalue))
+
+Res_nifH %>% 
+  ggplot(aes(x = pvalue))+
+  geom_histogram()+
+  facet_wrap(~sediment)
+
+Res_nifH$padj <- p.adjust(Res_nifH$pvalue, method = "holm")
+
+Res_nifH_sig <- 
+Res_nifH %>% 
+  group_by(sediment) %>% 
+  filter(padj < 0.05) %>% 
+  arrange(sediment, padj)
+
+Res_nifH_sig
+
+OTU_nifh[,Res_nifH_sig$row] %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = as.numeric(sample)) %>% 
+  gather(OTU, counts, -sample) %>% 
+  left_join(FuncDat) %>% 
+  ggplot(aes(x = OTU, y = log2(counts+0.5), colour = sediment))+
+  geom_point(position= position_jitter(width = 0.2))
+
+
+
+d <- plotCounts(nifH_d2, gene= "OTU_656", 
+                intgroup=c("N2_fixation", "sediment"),
+                returnData=TRUE)
+
+d %>% 
+  ggplot(., aes(x=count, y=N2_fixation, colour = sediment)) + 
+  geom_point()+
+  scale_x_log10()+
+  stat_smooth(method = "lm", se = F)
+  labs(title = slice(res_nif,which.min(padj))$row)
+
+
+
+if(TRUE) {Res_df_nifh <- 
+  bind_rows(lapply(Res_list2, as.data.frame)) %>% 
+  mutate(OTU = unlist(lapply(Res_list, row.names))) %>% 
+  gather(sample, LFC, -OTU) %>% 
+  mutate(sample = as.numeric(sample)) %>% 
+  left_join(FuncDat) %>% 
+  na.omit() 
+
+
+  ggplot(Res_df_nifh, aes(y = N2_fixation, x = LFC, colour = sediment))+
+  geom_point()+
+  facet_wrap(~OTU*sediment, scales = "free_x", drop = TRUE, nrow = 2)+
+  stat_smooth(method ="lm", se = F, size = 0.5)+
+  theme_bw()+ 
+  scale_colour_manual(values = c("forestgreen"))}
+
+```
+One OTU is found to be correlated to process rates but the plot suggests that this is driven by a single sample that has both high N2 fixation and high abundance of that OTU. 
+
+### blast Hits
+
+```{r, eval = F}
+nifH_OTUS <- readDNAStringSet("nifH_analysis/otus_final_nosingle.fa")
+
+nifH_OTUS[gsub("(.+);.+", "\\1", names(nifH_OTUS)) %in% unique(Res_df_nifh$OTU)]
+
+nifH_OTUS[gsub("(.+);.+", "\\1", names(nifH_OTUS)) %in% unique(Res_df_nifh$OTU)] %>% 
+  writeXStringSet(.,"16S_analysis/otus_diff_abundance.fasta")
+
+```
+
+
+### Differences between sediments
+
++ We cluster the samples based on the corrected counts.
++ To make the clustering "blind" to the experimental design, we enable the option `blind = T`.
+
+```{r}
+
+nif_cluster <- read.table("nif_cluster.txt", stringsAsFactors = FALSE) 
+
+VST_nif <- assay(varianceStabilizingTransformation(Sigdiff_nif, blind = T))
+
+VST_nif[VST_nif < 0 ]  <- 0
+
+VST_nif <- VST_nif[ - c(which(rowSums(VST_nif) == 0)), ]
+
+if(FALSE) {
+  
+  TREE_nif <- read.tree("TREE_nifh_um_oT.tre")
+  PS_nif <- phyloseq(otu_table(VST_nif, taxa_are_rows = T),
+                    phy_tree(TREE_nif))
+
+  Dist <- UniFrac(PS_nosz1, weighted = T)
+
+  NMDS_nif <- metaMDS(Dist, autotransform = FALSE, trace = 0, distance = "bray")
+} else {
+
+  NMDS_nif <- metaMDS(t(VST_nif), autotransform = FALSE, trace = 0, distance = "bray")
+  
+}
+
+stressplot(NMDS_nif)
+
+# test if differneces in sediments are significant 
+
+dist_nif <- metaMDSredist(NMDS_nif)
+
+adonis(dist_nif ~ sediment, 
+       data = FuncDat[ match( attr(dist_nif,"Labels"),FuncDat$sample),])
+
+Stress_nif <- NMDS_nif$stress
+
+NMDS_nifh <- NMDS_nif$points %>% 
+  data.frame() %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = as.numeric(sample)) %>% 
+  left_join(.,FuncDat) %>% 
+  na.omit()
+
+NMDS_plot_nifh <- ggplot(NMDS_nifh, aes(x = MDS1, y =MDS2, colour = sediment))+
+  geom_point(size = 3)+
+ # geom_label(data = filter(NMDS_nifh, sample %in% c(32:36, 42)), aes(label = sample), 
+  #          nudge_x= 0.05, size = 6, alpha = 0.4)+
+  theme_bw()+
+  ggtitle("nifH gene composition - bray-curtis - rlogTransformed")+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
+  
+
+NMDS_plot_nifh
+
+```
+
+
+We see a clear separation of the samples by habitat and the permanova confirms that the differnces are significant (p = 0.001, r2 = 0.59)
+
+####### additional analysis #######
+
+while no single OTU predicts the process rates, we can check if information about OTU abundace is enough for a ML algorithm to be able to predict the process rates
+
+first we narrow down the number of OTUs
+
+```{r}
+summary(colSums(t(VST_nif)))
+
+set.seed(890972)
+
+train_nifH <- FuncDat %>% 
+  group_by(sediment) %>%
+  sample_n(5)
+
+train_OTU <- t(VST_nif)[row.names(t(VST_nif)) %in% train_nifH$sample,]
+
+
+
+#library(randomForest)
+
+conf_nifH <- 
+  as.data.frame(t(VST_nif)[! row.names(t(VST_nif)) %in% train_nifH$sample,]) %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = as.numeric(sample)) %>% 
+  left_join(filter(FuncDat, ! sample %in% train_nifH$sample))
+
+train_nifH_div <- select(train_nifH, 
+                         Level, sediment, 
+                         effN_nifh, effN_bac, 
+                         corr_nifH, N2_fixation) %>%
+  ungroup() %>% 
+  mutate(sediment = factor(sediment))
+
+nifH_rf_div <- randomForest(N2_fixation ~ ., data = train_nifH_div, importance = T, mtry = 3)
+
+importance(nifH_rf_div)
+
+
+nifH_rf <- randomForest(train_nifH, train_nifH$N2_fixation, ntree = 10000, mtry = ncol(train_OTU))
+
+FuncDat %>% 
+  mutate(sediment = factor(sediment)) %>% 
+  predict(nifH_rf_div,. ) %>% 
+  data.frame(pred = .) %>% 
+  cbind(FuncDat, .) %>% 
+  select(-matches("OTU")) %>% 
+  #select(N2_fixation, pred) %>% 
+  #lm(N2_fixation ~ pred, data = .) %>% summary 
+  ggplot(aes(corr_nifH, N2_fixation))+
+  geom_point()+
+  geom_line(aes(x = corr_nifH, y = pred))+
+  geom_smooth(method = "lm", se = F)
+
+
+# permutation # 
+
+p.val <- vector(mode="numeric", length=100)
+r2 <- p.val <- vector(mode="numeric", length=100)
+
+for(i in 1:100){
+perm_train_OTU <-  t( apply(train_OTU,1,sample) ) 
+dimnames(perm_train_OTU) <- dimnames(train_OTU)
+
+nifH_rf_perm <- randomForest(perm_train_OTU, train_nifH$N2_fixation, ntree = 500)
+
+pred <- predict(nifH_rf_perm, conf_nifH) %>% 
+  data.frame(pred = .) %>% 
+  cbind(conf_nifH, .) %>% 
+  lm(N2_fixation ~ pred, data = .) %>% summary
+
+r2[i] <- pred$r.squared
+p.val[i] <- pred$coefficients[2,4]}
+
+hist(r2)
+min(p.val)
+
+
+
+```
+
+
+### differentially abundant OTUs between sediments
+
+```{r}
+library(ape)
+TREE_nif <- read.tree("TREE_nifh_um_oT.tre")
+plot(TREE_nif, type = "fan", show.tip.label = FALSE)
+
+```
+
+
+```{r}
+# Get the results for all contratst and store them list
+SedComb <- combn(c("cyano", "ruppia", "sand", "silt"), 2)
+
+alpha = 0.05
+LFC = 1
+
+reslist_nif <- list()
+
+par(mfrow=c(2,3))
+
+for(i in 1:ncol(SedComb)) {
+res = results(Sigdiff_hab_nif, contrast = c("sediment", SedComb[,i]), cooksCutoff = FALSE, lfcThreshold = LFC) 
+#plotMA(res, main = paste(SedComb[,i], collapse = " vs. "))
+sigtab <- res[res$padj < alpha & !is.na(res$padj),]
+reslist_nif[[i]] <- sigtab
+}
+
+names(reslist_nif) <- paste(SedComb[1, ], SedComb[2,], sep = "_")
+
+diffOTUs_nif <- unique(unlist(lapply(reslist_nif, rownames)))
+
+VST_nif[sample(diffOTUs_nif, 64),] %>% 
+  data.frame() %>% 
+  rownames_to_column(var = "OTU") %>% 
+  gather(sample, abundance, -OTU) %>% 
+  mutate(sample = as.numeric(gsub("X", "", sample))) %>% 
+  left_join(meta) %>% 
+  ggplot( aes(x = sediment, y = abundance, colour = sediment))+
+  geom_point()+
+  facet_wrap(~OTU)+
+  theme_bw()+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
+  labs(y = "~ log(2) of normalized counts")
+```
+
+
+## 16S
+
++ Reading in data & data wrangling.
+
+Read in the relevant files:
+```{r, cache = TRUE}
+OTU_bac <- read.table("16S_analysis/OTU_bac_clean.txt", header = TRUE, stringsAsFactors = FALSE)
+TAX <- read.table("16S_analysis/Tax_clean.txt",  header = TRUE, stringsAsFactors = FALSE)
+TAX_m <- as.matrix(TAX)
+
+dimnames(OTU_bac)[[1]] <- sub("C", "", dimnames(OTU_bac)[[1]])
+```
+
+
+As for `nifH`. Here `~sediment + Denitrification` means that we look for a correlation with Denitrification, controling for sediment. 
+
+### Venn diagram of OTUs
+```{r}
+
+ # maybe logtransform N2_fixation?    ##########
+
+ps_16S <- phyloseq(otu_table(OTU_bac, taxa_are_rows = F),
+                   sample_data(FuncDat),
+                   tax_table(TAX_m))
+
+ps_16S_mS <- merge_samples(ps_16S, "sediment", fun=sum)
+
+ps_16S_mS_d2 <- phyloseq_to_deseq2(ps_16S_mS, ~ 1)
+
+ps_16S_vst <- t(assay(varianceStabilizingTransformation(ps_16S_mS_d2, blind = T)))
+ps_16S_vst[ps_16S_vst < 0] <- 0
+ps_16S_vst[ps_16S_vst > 0] <- 1
+
+Area_names <- c()
+
+for(i in 1:4){
+  name_combinations <- combn(rownames(ps_16S_vst), i)
+  pasted_name <- apply(name_combinations, 2, function(x) paste(x, collapse = "_"))
+  Area_names <- c(Area_names, pasted_name)
+}
+
+Area_Ns <- vector("list", length(Area_names))
+names(Area_Ns) <- Area_names
+
+for (i in seq_along(Area_Ns)){
+  ps_sub <- ps_16S_vst[sapply(row.names(ps_16S_vst), 
+                                function(x) grepl(x, Area_names[i])), , drop=FALSE]
+  
+  Area_Ns[[i]] <- sum(colSums(ps_sub) == nrow(ps_sub))
+  
+}
+
+pdf("16S_Venn.pdf")
+
+draw.quad.venn(
+	area1 = Area_Ns$cyano,
+	area2 = Area_Ns$ruppia,
+	area3 = Area_Ns$sand,
+	area4 = Area_Ns$silt,
+	n12 = Area_Ns$cyano_ruppia,
+	n13 = Area_Ns$cyano_sand,
+	n14 = Area_Ns$cyano_silt,
+	n23 = Area_Ns$ruppia_sand,
+	n24 = Area_Ns$ruppia_silt,
+	n34 = Area_Ns$sand_silt,
+	n123 = Area_Ns$cyano_ruppia_sand,
+	n124 = Area_Ns$cyano_ruppia_silt,
+	n134 = Area_Ns$cyano_sand_silt,
+	n234 = Area_Ns$ruppia_sand_silt,
+	n1234 = Area_Ns$cyano_ruppia_sand_silt,
+	category = c("cyano", "ruppia", "sand", "silt"),
+	fill = c("cyan4", "forestgreen", "tan2", "brown4"),
+	lty = "dashed",
+	cex = 2,
+	cat.cex = 2,
+	cat.col = c("cyan4", "forestgreen", "tan2", "brown4"))
+
+dev.off()
+```
+
+
+#### Correlation with nitrogen fixation
+```{r}
+
+ps_16S_class <- tax_glom(ps_16S, "Class")
+
+d2_16S_N2 <- phyloseq_to_deseq2(ps_16S_class, ~sediment + sediment*N2_fixation)
+
+Sigdiff_16S_N2 <- DESeq(d2_16S_N2, fitType = "parametric", test = "Wald", minReplicatesForReplace = Inf)
+
+#res_16S_N2 = results(Sigdiff_16S_N2, name = "N2_fixation", cooksCutoff = FALSE)
+
+
+resultsNames(Sigdiff_16S_N2)
+
+res_nif <-  results(Sigdiff_16S_N2,  
+                    contrast=c("sediment","ruppia","cyano"), 
+                   # name = "sedimentsilt.N2_fixation",
+                   # name = "N2_fixation",
+                    cooksCutoff = FALSE, tidy =T) 
+
+res_nif %>% arrange(padj) %>% head()
+
+summary(res_nif)
+
+
+
+res_nif %>% 
+  as.data.frame() %>% 
+  filter(! is.na(pvalue)) %>% 
+ggplot(., aes(x = pvalue))+
+  geom_histogram(bins = 100)
+
+d <- plotCounts(d2_16S_N2, gene= slice(res_nif,which.min(padj))$row, 
+                intgroup=c("N2_fixation", "sediment"),
+                returnData=TRUE)
+
+d %>% 
+  ggplot(., aes(x=N2_fixation, y=count, colour = sediment)) + 
+  geom_point()+
+  #scale_y_log10(breaks = 10^c(1:10))+
+  stat_smooth(method = "lm", se = F)+
+  labs(title = TAX[slice(res_nif,which.min(padj))$row, ]$Class)
+
+
+
+
+
+
+
+
+sigtab_16S_N2 <-  res_16S_N2[res_16S_N2$padj < 0.05 & ! is.na(res_16S_N2$padj),]
+sigtab_16S_N2 
+
+plotDispEsts(Sigdiff_16S_N2, main = "dispersion estimations")
+plotMA(res_16S_N2, alpha = 0.05,
+       main = "shrunken log2fold changes with unit process rate change")
+
+ Res2 <- assay(
+    varianceStabilizingTransformation(d2_16S_N2,blind =T)
+    )[row.names(sigtab_16S_N2),]
+
+ OTU_DF <- 
+  data.frame(LFC = Res2) %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = as.numeric(sample)) %>%
+  mutate(OTU =row.names(sigtab_16S_N2) ) %>% 
+  left_join(FuncDat) 
+ 
+ggplot(OTU_DF, aes(y = N2_fixation, x = LFC, colour = sediment))+
+  geom_point()+
+ # stat_smooth(method ="lm", se = F, size = 0.3, linetype = "dashed")+
+  stat_smooth(aes(group = 1), colour = "black", method ="lm", se = F, size = 0.5)+
+  theme_bw()+ 
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
+
+
+
+```
+
++ If we account for differnce between the sediments, no OTU correlates with Nitrogen fixation. This means that no OTU is significantly correlated with N2 fixation across all sediments
+
+
+### per habitat
+
+```{r}
+
+Res_list <-  list()
+Res_list2 <- list()
+
+for (i in unique(FuncDat$sediment)){
+  
+  OTU_sed <- OTU_bac[rownames(OTU_bac) %in% 
+                       FuncDat[FuncDat$sediment == i,]$sample, ]
+  
+  bac_sed <- phyloseq(otu_table(OTU_sed, taxa_are_rows = F),
+                    sample_data(FuncDat))
+  
+  bac_sed <- filter_taxa(bac_sed, kOverA(2, 50), prune=TRUE)
+  
+  bac_d2_sed <- phyloseq_to_deseq2(bac_sed, ~ N2_fixation)
+
+  Sigdiff_bac_sed <- DESeq(bac_d2_sed, fitType = "parametric", test = "LRT",
+                           minReplicatesForReplace = Inf, betaPrior = FALSE, reduced = ~ 1)
+  
+  res_bac_Sed = results(Sigdiff_bac_sed, name = "N2_fixation", cooksCutoff = FALSE,
+                        independentFiltering = FALSE, tidy = T) %>% 
+    mutate(sediment = i)
+  
+#  sigtab_bac <- res_bac_Sed[res_bac_Sed$padj < 0.05 & ! is.na(res_bac_Sed$padj),]
+  
+  Res_list[[i]] <- res_bac_Sed
+  
+    
+ #   Res2 <- assay(
+  #  varianceStabilizingTransformation(Sigdiff_bac_sed,blind =T)
+  #  )[row.names(sigtab_bac),]
+    
+  #  if(is.null(nrow(Res2))) {
+  #    Res2 <- t(data.frame(OTU = Res2))
+  #    row.names(Res2) <- row.names(sigtab_bac)
+  #  }
+    
+#  Res_list2[[i]] <- Res2
+    
+  
+}
+
+Res_list_bac <- Res_list
+
+Res_df_bac <- 
+  Res_list_bac %>% 
+  bind_rows() %>% 
+  filter(! is.na(pvalue))
+
+ggplot(Res_df_bac, aes(x = pvalue))+
+  geom_histogram()+
+  facet_wrap(~sediment)
+
+Res_df_bac$padj <- p.adjust(Res_df_bac$pvalue, method = "BH")
+
+Res_df_bac %>% 
+  filter(padj <= 0.1) 
+  arrange(sediment, padj)
+
+Res_df_bac <- 
+  bind_rows(lapply(Res_list2, as.data.frame)) %>% 
+  mutate(OTU = unlist(lapply(Res_list, row.names))) %>% 
+  gather(sample, LFC, -OTU) %>% 
+  mutate(sample = as.numeric(sample)) %>% 
+  left_join(FuncDat) %>% 
+  na.omit() 
+
+  ggplot(Res_df_bac, aes(y = N2_fixation, x = LFC, colour = sediment))+
+  geom_point()+
+  facet_wrap(~sediment*OTU, scales = "free_x", drop = TRUE,
+             labeller = label_wrap_gen(multi_line=FALSE))+
+  stat_smooth(method ="lm", se = F, size = 0.5)+
+  theme_bw()+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "brown4"))
+
+```
+
+### blast Hits
+
+```{r}
+bac_OTUS <- readDNAStringSet("16S_analysis/otus_final_nosingle.fa")
+
+bac_OTUS[gsub("(.+);.+", "\\1", names(bac_OTUS)) %in% unique(Res_df_bac$OTU)]
+
+bac_OTUS[gsub("(.+);.+", "\\1", names(bac_OTUS)) %in% unique(Res_df_bac$OTU)] %>% 
+  writeXStringSet(.,"16S_analysis/otus_diff_abundance.fasta")
+
+
+TAX <- read.table("16S_analysis/Tax_clean.txt")
+CorrSeq_16S <- TAX[rownames(TAX) %in% unique(Res_df_bac$OTU), ]
+
+CorrSeq_16S
+
+
+```
+
++ we can check if the Genus annotations of the 16S sequences that we detected are present in the nifH database form ARB
+
++ we check against the `tree_RepSeq_nifHPCRregion_AA_April2014_CDHITAA` tree. It's the most comprehensive tree in the database (6212 sequences). 
+
+```{r}
+Ref_meta <- read_tsv("nifH_analysis/ref_spec_meta.txt", 
+                     col_names = c("names",
+                                   "Raymond_group",
+                                   "Young_group",
+                                   "full_name",
+                                   "AMINO_2014",
+                                   "DNA_2003",
+                                   "isolation_source",
+                                   "nuc_length",
+                                   "PutativeChimera"))
+
+GG <- read_delim("16S_analysis/gg_13_5_taxonomy.txt", delim = ";",
+                 col_names = c("Kingdom", "Phylum", "Class",
+                               "Order", "Family", "Genus",
+                               "Species"))
+
+GG <- mutate_all(GG, function(x) gsub(".+\\w__(\\w+)", "\\1", x)) %>% distinct
+
+N_fix_Genus <- gsub("(\\w+)\\s\\w+", "\\1", Ref_meta$full_name, " ") %>% unique 
+
+N_fix_tax <- GG[which(!is.na(pmatch(GG$Genus, N_fix_Genus))),] %>% as.data.frame()
+
+
+CorrSeq_16STF <- CorrSeq_16S
+
+for(i in colnames(CorrSeq_16S)) {
+  CorrSeq_16STF[,i] <- CorrSeq_16S[,i] %in% N_fix_tax[,i]
+  
+}
+  
+CorrSeq_16S
+CorrSeq_16STF
+```
+
+### Differences between sediments
+
++ We cluster the samples based on the corrected counts.
++ To make the clustering "blind" to the experimental design, we enable the option `blind = T`.
+
+```{r}
+
+VST_16S <- assay(varianceStabilizingTransformation(Sigdiff_16S_N2, blind = T))
+
+VST_16S[VST_16S < 0 ]  <- 0
+
+VST_16S <- VST_16S[ - c(which(rowSums(VST_16S) == 0)), ]
+
+if( FALSE) {
+  
+  TREE_16S <- read.tree("16S_analysis/Tree_bac_um_oT.tre")
+  dimnames(OTU_bac)[[1]] <- sub("C", "", dimnames(OTU_bac)[[1]])
+  PS_16S <- phyloseq(otu_table(VST_16S, taxa_are_rows = T),
+                    phy_tree(TREE_16S))
+
+  Dist <- UniFrac(PS_16S, weighted = T)
+
+  NMDS_16S <- metaMDS(Dist, autotransform = FALSE, trace = 0, distance = "bray")
+} else {
+
+  NMDS_16S <- metaMDS(t(VST_16S), autotransform = FALSE, trace = 0, distance = "bray")
+  
+}
+
+stressplot(NMDS_16S)
+
+dist_16S <- metaMDSredist(NMDS_16S)
+
+adonis(dist_16S ~ sediment, 
+       data = FuncDat[ match( attr(dist_16S,"Labels"),FuncDat$sample),])
+
+Stress_16S <- NMDS_16S$stress
+
+NMDS_16S <- NMDS_16S$points %>% 
+  data.frame() %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = as.numeric(sample)) %>% 
+  left_join(.,FuncDat) %>% 
+  na.omit()
+
+NMDS_plot_16S <- 
+  ggplot(NMDS_16S, aes(x = MDS1, y =MDS2, colour = sediment))+
+  geom_point(size = 3)+
+#  geom_label(data = filter(NMDS_16S, sample %in% c(32:36, 42)), aes(label = sample),
+ #           nudge_x= 0.05, size = 6, alpha = 0.4)+
+  theme_bw()+
+  ggtitle("16S composition - bray curtis")+
+  scale_colour_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
+  
+
+NMDS_plot_16S
+```
+
+
+
+We see a separation of the samples by habitat. The difference is significant (p = 0.001) and explains ~50 % of the variance (r^2 0.49)
+
+
+```{r}
+summary(colSums(t(VST_16S)))
+
+set.seed(890972)
+
+train_16S <- FuncDat %>% 
+  group_by(sediment) %>%
+  sample_n(5)
+
+train_OTU_16 <- t(VST_16S)[row.names(t(VST_16S)) %in% train_16S$sample,]
+
+
+
+#library(randomForest)
+
+conf_16S <- 
+  as.data.frame(t(VST_16S)[! row.names(t(VST_16S)) %in% train_16S$sample,]) %>% 
+  rownames_to_column(var = "sample") %>% 
+  mutate(sample = as.numeric(sample)) %>% 
+  left_join(filter(FuncDat, ! sample %in% train_16S$sample))
+
+
+OTU16S_rf <- randomForest(train_OTU_16, train_16S$N2_fixation, ntree = 10000)
+
+predict(OTU16S_rf, conf_16S) %>% 
+  data.frame(pred = .) %>% 
+  cbind(conf_16S, .) %>% 
+  select(-matches("OTU")) %>% 
+  select(N2_fixation, pred) %>% 
+ # lm(N2_fixation ~ pred, data = .) %>% summary 
+  ggplot(aes(pred, N2_fixation))+
+  geom_point()+
+  geom_smooth(method = "lm")
+
+
+```
+
+
+
+## Summary
+
+```{r}
+
+nmds_clust <- 
+NMDS_nifh %>% 
+  mutate(gene = "nifh") %>% 
+  rbind(mutate(NMDS_16S, gene = "16S")) %>% 
+  mutate(gene = factor(gene, labels=c("16S rRNA", "nifH"))) %>% 
+  ggplot(., aes(x = MDS1, y =MDS2))+
+  geom_point(size = 4, colour = "darkgrey", alpha = 0.8, 
+             aes(fill = sediment, shape = sediment))+
+  geom_text(data = data.frame(gene = c("16S rRNA", "nifH"),
+                              x = 0.5, y = 0.8,
+                              label = c(paste("stress: ",signif(Stress_16S,2)),
+                                        paste("stress: ",signif(Stress_nif,2)))),
+            aes(x = x, y = y, label = label))+
+  facet_wrap(~gene, nrow = 1)+
+  theme_bw()+
+  ggtitle("NMDS clustering of 16S rRNA and nifH by habitat")+
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
+  scale_shape_manual(values = c(21:24))
+
+ggsave("Figure_3.pdf", nmds_clust, width = 8, height = 4)
+ggsave("Figure_3.jpg", nmds_clust, width = 8, height = 4)
+
+nmds_clust 
+
+```
+
+```{r}
+
+Figure_4 <- 
+Res_df_bac %>% 
+  mutate(OTU = paste("16S ", OTU)) %>% 
+  rbind(mutate(Res_df_nifh, OTU = paste("nifH", OTU))) %>% 
+  rbind(mutate(OTU_DF, OTU = paste("16S ", OTU))) %>% 
+  mutate(OTU = factor(OTU, levels=c(levels(as.factor(.$OTU))[c(1,2,5,8,4,7,6,9,3)]))) %>% 
+  ggplot(., aes(y = N2_fixation, x = LFC, fill = sediment, shape = sediment))+
+  geom_point(colour = "black", alpha = 0.8)+
+  facet_wrap(~OTU, scales = "free_x", drop = TRUE,
+             labeller = label_wrap_gen(multi_line=FALSE),
+             nrow = 2)+
+  stat_smooth(method ="lm", se = F, size = 0.5, aes(group = 1), colour = "darkgrey")+
+  theme_bw()+
+  theme(legend.position = c(0.9,0.2))+
+  scale_fill_manual(values = c("cyan4", "forestgreen","tan2", "brown4"))+
+  scale_colour_manual(values = c("cyan4", "forestgreen","tan2", "brown4"))+
+  scale_shape_manual(values = c(21:24))+
+  labs(x = "log(2)-fold change", y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))
+
+
+ggsave("Figure_4.jpeg", Figure_4, height = 3, width = 7)
+ggsave("Figure_4.pdf", Figure_4, height = 3, width = 7)
+
+
+
+Figure_4
+
+```
+
+```{r}
+
+bac <- bind_rows(lapply(Res_list_bac, as.data.frame))
+bac_allSed <- as.data.frame(sigtab_16S_N2)
+nifH <- bind_rows(lapply(Res_list_nifH, as.data.frame))
+
+bac <- mutate(bac, OTU = unlist(lapply(Res_list_bac, row.names)))
+bac_allSed <- rownames_to_column(bac_allSed, var = "OTU")
+nifH <- mutate(nifH, OTU = unlist(lapply(Res_list_nifH, row.names)))
+
+mutate(bac, OTU = paste("16S", OTU)) %>% 
+  rbind(mutate(nifH, OTU = paste("nifH", OTU))) %>% 
+  rbind(mutate(bac_allSed, OTU = paste("16S_allSed", OTU))) %>% 
+  select(OTU, padj, baseMean, log2FoldChange) %>% 
+  kable()
+
+
+```
+
+
+
+# correlation simulation
+
+```{r}
+library(GGally)
+library(corrplot)
+library(dplyr)
+
+
+getBiCop <- function(n, rho, mar.fun=rnorm, x = NULL, ...) {
+  if (!is.null(x)) {X1 <- x} else {X1 <- mar.fun(n, ...)}
+  if (!is.null(x) & length(x) != n) warning("Variable x does not have the same length as n!")
+  
+  C <- matrix(rho, nrow = 2, ncol = 2)
+  diag(C) <- 1
+  
+  C <- chol(C)
+  
+  X2 <- mar.fun(n)
+  X <- cbind(X1,X2)
+  
+  # induce correlation (does not change X1)
+  df <- X %*% C
+  
+  ## if desired: check results
+  #all.equal(X1,X[,1])
+  #cor(X)
+  
+  return(df)
+}
+
+set.seed(19234578)
+
+Var1 <- rnorm(50, 0,1)
+Var2 <- getBiCop(n = length(Var1), rho = 0.7, mar.fun = rnorm, x = Var1)[,2]
+Var3 <- getBiCop(n = length(Var1), rho = 0.7, mar.fun = rnorm, x = Var2)[,2]
+Var4 <- getBiCop(n = length(Var1), rho = 0.7, mar.fun = rnorm, x = Var3)[,2]
+Var5 <- getBiCop(n = length(Var1), rho = 0.7, mar.fun = rnorm, x = Var4)[,2]
+
+DF <- data.frame(Var1 = Var1,
+                 Var2 = Var2,
+                 Var3 = Var3,
+                 Var4 = Var4,
+                 Var5 = Var5)
+        
+
+pdf(file = "Figure_S5.pdf")
+DF %>%   cor() %>%  corrplot(type = "lower", tl.col = "black", cl.ratio = 0.2, 
+                      cl.length = 11, number.cex = 0.8, cl.cex = 1, tl.cex = 1, addCoef.col = "#323232", 
+                      diag = F, method="ellipse",  cl.lim = c(0,1))
+
+dev.off()
+
+DF %>%   cor() %>%  corrplot(type = "lower", tl.col = "black", cl.ratio = 0.2, 
+                      cl.length = 11, number.cex = 0.8, cl.cex = 1, tl.cex = 1, addCoef.col = "#323232", 
+                      diag = F, method="ellipse",  cl.lim = c(0,1))
+
+#plot <- ggscatmat(DF)
+#plot$layers[[6]]$aes_params$colour <- "#377eb8"
+#plot$layers[[6]]$aes_params$alpha <- "0.4"
+
+#plot + theme_bw() + stat_smooth(method = "lm", se = T, colour = "#e41a1c", size = 0.6)
+
+
+```
+
+
+```{r}
+DF <- data.frame(S = 1:100)
+DF$BM <- DF$S^0.26
+DF$BM_min <- DF$S^0.16
+DF$BM_max <- DF$S^0.37
+
+DF %>% gather(Est, BM, -S) %>% 
+  ggplot(aes(x = S, y = BM, colour = Est))+
+  geom_point()
+```
+
