@@ -242,7 +242,7 @@ Alsterberg_plot
 ```{r}
 
 
-Figure_1 <- 
+Figure_1_data <- 
 Andersson %>% 
   select(N2_fixation) %>% 
   cbind(PRED_PI_A) %>% 
@@ -253,8 +253,11 @@ Andersson %>%
                                  "Alsterberg et al."))) %>% 
   filter(N2_fixation > 0) %>% 
   group_by(Exp) %>% 
-  mutate(Mean = exp(mean(log(N2_fixation)))) %>% 
-  ggplot(., aes(x = nifH, y = N2_fixation, fill = Exp))+
+  mutate(Mean = exp(mean(log(N2_fixation))))
+
+
+  
+Figure_1_full_range <- ggplot(Figure_1_data, aes(x = nifH, y = N2_fixation, fill = Exp))+
   geom_point(shape = 21, size = 2, colour = "black")+
   geom_ribbon( aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.1, fill = "black")+
   geom_line(aes(x = nifH, y = fit))+
@@ -267,10 +270,12 @@ Andersson %>%
             aes(x = x, y=y, label = label), fontface = "bold")+
   scale_x_log10(
         breaks = trans_breaks("log10", function(x) 10^x),
-        labels = trans_format("log10", math_format(10^.x)))+
+        labels = trans_format("log10", math_format(10^.x)),
+        limits=c(1e5,1e7))+
   scale_y_log10(
         breaks = trans_breaks("log10", function(x) 10^x),
-       labels = trans_format("log10", math_format(10^.x)))+
+       labels = trans_format("log10", math_format(10^.x)),
+       limits = c(1e-7,1))+
   scale_fill_manual(values = c( "#377eb8", "#a50f15"))+
   labs(x = expression(nifH~(copies~g^-1)),
        y = expression(N[2]~(µmol~g^-1~d^-1)),
@@ -278,10 +283,7 @@ Andersson %>%
   theme_bw()+
   theme(legend.position = "none")
 
-ggsave("Figure_1.pdf", plot = Figure_1, width = 7, height = 4)
-ggsave("Figure_1.jpeg", plot = Figure_1, width = 7, height = 4)
-
-Figure_1
+Figure_1_full_range
 ```
 
 ## In range prediction
@@ -385,7 +387,7 @@ Alsterberg_plot_range
 ```{r}
 
 
-#Figure_1 <- 
+Figure_1_in_range_data <- 
 Andersson_range %>% 
   select(N2_fixation) %>% 
   cbind(PRED_PI_A_range) %>% 
@@ -396,8 +398,11 @@ Andersson_range %>%
                                  "Alsterberg et al."))) %>% 
   filter(N2_fixation > 0) %>% 
   group_by(Exp) %>% 
-  mutate(Mean = exp(mean(log(N2_fixation)))) %>%
-  ggplot(., aes(x = nifH, y = N2_fixation, fill = Exp))+
+  mutate(Mean = exp(mean(log(N2_fixation))))
+
+
+Figure_1_in_range <- 
+  ggplot(Figure_1_in_range_data, aes(x = nifH, y = N2_fixation, fill = Exp))+
   geom_point(shape = 21, size = 2, colour = "black")+
   geom_ribbon( aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.1, fill = "black")+
   geom_line(aes(x = nifH, y = fit))+
@@ -410,10 +415,12 @@ Andersson_range %>%
             aes(x = x, y=y, label = label), fontface = "bold")+
   scale_x_log10(
         breaks = trans_breaks("log10", function(x) 10^x),
-        labels = trans_format("log10", math_format(10^.x)))+
+        labels = trans_format("log10", math_format(10^.x)),
+        limits=c(1e5,1e7))+
   scale_y_log10(
         breaks = trans_breaks("log10", function(x) 10^x),
-       labels = trans_format("log10", math_format(10^.x)))+
+       labels = trans_format("log10", math_format(10^.x)),
+       limits=c(1e-7,1))+
   scale_fill_manual(values = c( "#377eb8", "#a50f15"))+
   labs(x = expression(nifH~(copies~g^-1)),
        y = expression(N[2]~(µmol~g^-1~d^-1)),
@@ -424,9 +431,8 @@ Andersson_range %>%
 #ggsave("Figure_1.pdf", plot = Figure_1, width = 7, height = 4)
 #ggsave("Figure_1.jpeg", plot = Figure_1, width = 7, height = 4)
 
-#Figure_1
+Figure_1_in_range
 ```
-
 
 + prediction statistics
 
@@ -446,6 +452,41 @@ rmspe(Pred_Nfix_range$N2_fixation, mean(Pred_Nfix_range$N2_fixation))
 
 
 ```
+
+## Figure 1
+
+```{r}
+Figure_1 <- 
+Figure_1_in_range_data %>% 
+  mutate(in_range = "common range") %>% 
+  bind_rows(mutate(Figure_1_data, in_range = "full range")) %>% 
+  mutate(in_range = factor(in_range, levels = c("full range", "common range"))) %>% 
+  ggplot(., aes(x = nifH, y = N2_fixation, fill = Exp))+
+  geom_point(shape = 21, size = 2, colour = "black")+
+  geom_ribbon( aes(x = nifH, ymin = lwr, ymax = upr), alpha = 0.1, fill = "black")+
+  geom_line(aes(x = nifH, y = fit))+
+  geom_line(aes(x = nifH, y = Mean), size = 0.3, linetype = "dashed")+
+  facet_grid(in_range~Exp)+
+  scale_x_log10(
+        breaks = trans_breaks("log10", function(x) 10^x),
+        labels = trans_format("log10", math_format(10^.x)))+
+  scale_y_log10(
+        breaks = trans_breaks("log10", function(x) 10^x),
+       labels = trans_format("log10", math_format(10^.x)))+
+  scale_fill_manual(values = c( "#377eb8", "#a50f15"))+
+  labs(x = expression(nifH~(copies~g^-1)),
+       y = expression(N[2]~(µmol~g^-1~d^-1)),
+       fill = "Study")+
+  theme_bw()+
+  theme(legend.position = "none")
+
+
+ggsave("Figure_1.pdf", plot = Figure_1, width = 7, height = 5)
+ggsave("Figure_1.jpeg", plot = Figure_1, width = 7, height = 5)
+
+Figure_1
+```
+
 
 # Hypothesis 1
 
@@ -540,8 +581,8 @@ gg_diag(mod_16Sdiv)
 plot_16Sdiv <-
   ggplot(FuncDat_raw)+
   geom_point(aes(x = effN_bac, y = N2_fixation,
-                 fill = sediment, shape = sediment), 
-             colour = "black", size = 3, alpha = 0.8)+
+                 fill = sediment), 
+             colour = "black", size = 3, alpha = 0.8, shape = 21)+
   geom_segment(aes(x = min(effN_bac), 
                    xend = max(effN_bac), 
                    y = mean(N2_fixation),
@@ -559,8 +600,7 @@ plot_16Sdiv <-
   scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
   scale_x_continuous(limits = c(0,NA))+
   theme(legend.position = "none")+
-  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
-  scale_shape_manual(values = c(21:24))
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
 
 
 
@@ -581,8 +621,8 @@ gg_diag(mod_nifh)
 plot_nifh <-
   ggplot(FuncDat_raw)+
   geom_point(aes(x = effN_nifh, y = N2_fixation, 
-                 fill = sediment, shape = sediment), 
-             colour = "black", size = 3, alpha = 0.8)+
+                 fill = sediment), 
+             colour = "black", size = 3, alpha = 0.8, shape = 21)+
   geom_segment(aes(x = min(effN_nifh), 
                    xend = max(effN_nifh), 
                    y = mean(N2_fixation),
@@ -600,8 +640,7 @@ plot_nifh <-
   scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
   scale_x_continuous(limits = c(0,NA))+
   theme(legend.position = "none")+
-  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
-  scale_shape_manual(values = c(21:24))
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
 
 
 plot_nifh
@@ -620,8 +659,8 @@ gg_diag(mod_nifH_ab)
 plot_nifH_ab  <-
   ggplot(FuncDat)+
   geom_point(aes(x = corr_nifH, y = N2_fixation, 
-                 fill = sediment, shape = sediment), 
-              colour = "black", size = 3, alpha = 0.8)+
+                 fill = sediment), 
+              colour = "black", size = 3, alpha = 0.8, shape = 21)+
   geom_segment(aes(x = min(corr_nifH), 
                    xend = max(corr_nifH), 
                    y = mean(N2_fixation),
@@ -640,8 +679,7 @@ plot_nifH_ab  <-
   scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
   scale_x_continuous(limits = c(0,NA))+
   theme(legend.position = "none")+
-  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
-  scale_shape_manual(values = c(21:24))
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
 
 
 plot_nifH_ab
@@ -667,9 +705,9 @@ Pred <- predict(mod_hab, interval = "confidence", type = "response") %>%
 plot_hab <-
   ggplot(FuncDat)+
   geom_point(aes(x = sediment, y = N2_fixation, 
-                 fill = sediment, shape = sediment), 
+                 fill = sediment), 
               colour = "black", size = 3, alpha = 0.8,
-             position = position_jitter(width = 0.1))+
+             position = position_jitter(width = 0.1), shape = 21)+
   geom_crossbar(data = Pred, aes(x = sediment, 
                                  y = fit, 
                                  ymin = lwr,
@@ -687,8 +725,7 @@ plot_hab <-
   #scale_y_continuous(limits = c(-13,55))+
   scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
   theme(legend.position = "none")+
-  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
-  scale_shape_manual(values = c(21:24))
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
 
 
 
@@ -1300,7 +1337,7 @@ dev.off()
 
 ps_16S_class <- tax_glom(ps_16S, "Class")
 
-d2_16S_N2 <- phyloseq_to_deseq2(ps_16S_class, ~sediment + sediment*N2_fixation)
+d2_16S_N2 <- phyloseq_to_deseq2(ps_16S, ~sediment + sediment*N2_fixation)
 
 Sigdiff_16S_N2 <- DESeq(d2_16S_N2, fitType = "parametric", test = "Wald", minReplicatesForReplace = Inf)
 
@@ -1628,7 +1665,7 @@ NMDS_nifh %>%
   mutate(gene = factor(gene, labels=c("16S rRNA", "nifH"))) %>% 
   ggplot(., aes(x = MDS1, y =MDS2))+
   geom_point(size = 4, colour = "darkgrey", alpha = 0.8, 
-             aes(fill = sediment, shape = sediment))+
+             aes(fill = sediment), shape = 21)+
   geom_text(data = data.frame(gene = c("16S rRNA", "nifH"),
                               x = 0.5, y = 0.8,
                               label = c(paste("stress: ",signif(Stress_16S,2)),
@@ -1637,8 +1674,7 @@ NMDS_nifh %>%
   facet_wrap(~gene, nrow = 1)+
   theme_bw()+
   ggtitle("NMDS clustering of 16S rRNA and nifH by habitat")+
-  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))+
-  scale_shape_manual(values = c(21:24))
+  scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4"))
 
 ggsave("Figure_3.pdf", nmds_clust, width = 8, height = 4)
 ggsave("Figure_3.jpg", nmds_clust, width = 8, height = 4)
@@ -1655,7 +1691,7 @@ Res_df_bac %>%
   rbind(mutate(Res_df_nifh, OTU = paste("nifH", OTU))) %>% 
   rbind(mutate(OTU_DF, OTU = paste("16S ", OTU))) %>% 
   mutate(OTU = factor(OTU, levels=c(levels(as.factor(.$OTU))[c(1,2,5,8,4,7,6,9,3)]))) %>% 
-  ggplot(., aes(y = N2_fixation, x = LFC, fill = sediment, shape = sediment))+
+  ggplot(., aes(y = N2_fixation, x = LFC, fill = sediment))+
   geom_point(colour = "black", alpha = 0.8)+
   facet_wrap(~OTU, scales = "free_x", drop = TRUE,
              labeller = label_wrap_gen(multi_line=FALSE),
@@ -1665,7 +1701,6 @@ Res_df_bac %>%
   theme(legend.position = c(0.9,0.2))+
   scale_fill_manual(values = c("cyan4", "forestgreen","tan2", "brown4"))+
   scale_colour_manual(values = c("cyan4", "forestgreen","tan2", "brown4"))+
-  scale_shape_manual(values = c(21:24))+
   labs(x = "log(2)-fold change", y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))
 
 
