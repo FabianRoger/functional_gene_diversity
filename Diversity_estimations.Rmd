@@ -279,13 +279,15 @@ y_DIV_nifh %>%
   mutate(sed_comb = paste(sediment, collapse = "_"),
          sed_n = n(), comb_n = NA) %>% 
   ungroup() %>% 
-  rename( y_S = y_S_nifh , y_effN = y_effN_nifh) %>% 
+  dplyr::rename( y_S = y_S_nifh , y_effN = y_effN_nifh) %>% 
   select(y_S, y_effN, sed_comb, sed_n, comb_n) %>% 
   distinct(.keep_all = FALSE) %>% 
   rbind(y_nifh_pot) %>% 
   group_by(sed_n) %>% 
   mutate(weight = n()) %>% 
-  mutate(Obs = ifelse(is.na(comb_n), "observed", "potential"))
+  mutate(Obs = ifelse(is.na(comb_n), "observed", "potential")) %>% 
+  group_by(sed_comb) %>% 
+  mutate(comb_n = ifelse(is.na(comb_n), 1: n(), comb_n))
 
 y_nifh_pot$sed_comb <- factor(y_nifh_pot$sed_comb, 
                                levels = y_nifh_pot[with(y_nifh_pot, order(sed_n, sed_comb)),]$sed_comb)
@@ -510,13 +512,15 @@ y_DIV_bac %>%
   mutate(sed_comb = paste(sediment, collapse = "_"),
          sed_n = n(), comb_n = NA) %>% 
   ungroup() %>% 
-  rename( y_S = y_S_bac , y_effN = y_effN_bac) %>% 
+  dplyr::rename( y_S = y_S_bac , y_effN = y_effN_bac) %>% 
   select(y_S, y_effN, sed_comb, sed_n, comb_n) %>% 
   distinct(.keep_all = FALSE) %>% 
   rbind(y_bac_pot) %>% 
   group_by(sed_n) %>% 
   mutate(weight = n()) %>% 
-  mutate(Obs = ifelse(is.na(comb_n), "observed", "potential"))
+  mutate(Obs = ifelse(is.na(comb_n), "observed", "potential")) %>% 
+  group_by(sed_comb) %>% 
+  mutate(comb_n = ifelse(is.na(comb_n), 1: n(), comb_n))
 
 y_bac_pot$sed_comb <- factor(y_bac_pot$sed_comb, 
                                levels = y_bac_pot[with(y_bac_pot, order(sed_n, sed_comb)),]$sed_comb)
@@ -612,6 +616,8 @@ phlyo_noszI <- phyloseq(otu_table( cbind(OTU_nosz1, OTU_nosz2), taxa_are_rows = 
                       tax_table(matrix(c(rep("nozI", ncol(OTU_nosz1)), rep("noszII", ncol(OTU_nosz2))),
                                        dimnames = list(c(colnames(OTU_nosz1), colnames(OTU_nosz2)), "nosz"))))
 
+write.tree(TREE_nosz1, "nosz/nosZ_I_clean_FR.tree")
+
 plot_tree(phlyo_noszI, color = "nosz")
 ```
 
@@ -622,11 +628,12 @@ phlyo_noszII <- phyloseq(otu_table( cbind(OTU_nosz1, OTU_nosz2), taxa_are_rows =
                       phy_tree(TREE_nosz2),
                       tax_table(matrix(c(rep("nozI", ncol(OTU_nosz1)), rep("noszII", ncol(OTU_nosz2))),
                                        dimnames = list(c(colnames(OTU_nosz1), colnames(OTU_nosz2)), "nosz"))))
+write.tree(TREE_nosz2, "nosz/nosZ_II_clean_FR.tree")
 
 plot_tree(phlyo_noszII, color = "nosz")
 ```
 
-## nosZ I
+# nosZ I
 
 ### Sampling depth 
 
@@ -812,13 +819,15 @@ y_DIV_nosz1 %>%
   mutate(sed_comb = paste(sediment, collapse = "_"),
          sed_n = n(), comb_n = NA) %>% 
   ungroup() %>% 
-  rename( y_S = y_S_nosz1 , y_effN = y_effN_nosz1) %>% 
+  dplyr::rename( y_S = y_S_nosz1 , y_effN = y_effN_nosz1) %>% 
   select(y_S, y_effN, sed_comb, sed_n, comb_n) %>% 
   distinct(.keep_all = FALSE) %>% 
   rbind(y_nosz1_pot) %>% 
   group_by(sed_n) %>% 
   mutate(weight = n()) %>% 
-  mutate(Obs = ifelse(is.na(comb_n), "observed", "potential"))
+  mutate(Obs = ifelse(is.na(comb_n), "observed", "potential")) %>% 
+  group_by(sed_comb) %>% 
+  mutate(comb_n = ifelse(is.na(comb_n), 1: n(), comb_n))
 
 y_nosz1_pot$sed_comb <- factor(y_nosz1_pot$sed_comb, 
                                levels = y_nosz1_pot[with(y_nosz1_pot, order(sed_n, sed_comb)),]$sed_comb)
@@ -841,7 +850,7 @@ y_nosz1_pot_plot
   
 ```
 
-## nosZ II
+# nosZ II
 
 ### Sampling depth 
 
@@ -1030,13 +1039,15 @@ y_DIV_nosz2 %>%
   mutate(sed_comb = paste(sediment, collapse = "_"),
          sed_n = n(), comb_n = NA) %>% 
   ungroup() %>% 
-  rename( y_S = y_S_nosz2 , y_effN = y_effN_nosz2) %>% 
+  dplyr::rename( y_S = y_S_nosz2 , y_effN = y_effN_nosz2) %>% 
   select(y_S, y_effN, sed_comb, sed_n, comb_n) %>% 
   distinct(.keep_all = FALSE) %>% 
   rbind(y_nosz2_pot) %>% 
   group_by(sed_n) %>% 
   mutate(weight = n()) %>% 
-  mutate(Obs = ifelse(is.na(comb_n), "observed", "potential"))
+  mutate(Obs = ifelse(is.na(comb_n), "observed", "potential")) %>% 
+  group_by(sed_comb) %>% 
+  mutate(comb_n = ifelse(is.na(comb_n), 1: n(), comb_n))
 
 y_nosz2_pot$sed_comb <- factor(y_nosz2_pot$sed_comb, 
                                levels = y_nosz2_pot[with(y_nosz2_pot, order(sed_n, sed_comb)),]$sed_comb)
@@ -1052,7 +1063,7 @@ y_nosz2_pot_plot <- ggplot(y_nosz2_pot,aes(x = as.factor(sed_n), y = y_effN, fil
   scale_shape_manual(values = c(22,21))+
   scale_alpha_manual(values = c(1,0.6))+
   guides(fill = guide_legend(override.aes = list(shape = 21)))+
-  labs(x = "Habitat richness", y = "Effective number of species", title = "nosZ")+
+  labs(x = "Habitat richness", y = "Effective number of species", title = "nosZII")+
   theme_bw()
 
 y_nosz2_pot_plot
@@ -1069,11 +1080,14 @@ y_all_pot$sed_comb <- factor(y_all_pot$sed_comb,
                                levels = y_all_pot[with(y_all_pot, order(gene, sed_n, sed_comb)),]$sed_comb)
 
 
-pot_g_plot <- ggplot(y_all_pot,aes(x = as.factor(sed_n), y = y_effN, fill = sed_comb, shape = Obs, alpha = Obs))+
+pot_g_plot <- ggplot(y_all_pot, aes(x = sed_n, y = y_effN, fill = sed_comb, shape = Obs, alpha = Obs))+
   facet_wrap(~gene, scales = "free_y", nrow = 2)+
+ # geom_boxplot(data = y_all_pot, aes(x = as.factor(sed_n), y = y_effN, group = as.factor(sed_n)),
+  #             fill = NA, colour = "grey", outlier.colour = NA, notch = TRUE)+
+  geom_violin(aes(group = sed_n),fill = NA, colour = "grey", draw_quantiles = 0.5)+
   geom_point(size = 3, colour = "black",
              position = position_dodge(width = 0.7))+
-  geom_smooth(method = "lm", se = F, aes(group = 1, weight = 1/weight), colour = "black", size = 0.3)+
+  geom_smooth(method = "lm", formula =( y ~ x + poly(x,2)), se = F, aes(group = 1, weight = 1/weight), colour = "black", size = 0.3)+
   scale_fill_manual(values = c("cyan4", "forestgreen", "tan2", "brown4",
                                brewer.pal(6, "Set2"),
                                brewer.pal(4, "Dark2"),
@@ -1089,6 +1103,27 @@ pot_g_plot
 
 ggsave("potential_gamma_diversity.pdf", height = 12, width = 14)
 ggsave("potential_gamma_diversity.png", height = 12, width = 14)
+```
+```{r, fig.height= 6, fig.width= 8}
+y_all_pot %>% 
+  filter(gene %in% c("nifh", "16S")) %>%
+  select(y_effN, sed_comb, comb_n, Obs, gene, sed_n) %>% 
+  spread(gene, y_effN) %>% 
+  ggplot(., aes(x = `16S`, y = nifh, fill = factor(sed_n), shape = Obs, alpha = Obs))+
+  geom_point(size = 3, colour = "black") +
+  geom_smooth(method = "lm", se = F, size = 0.3, aes(group = factor(sed_n), colour = factor(sed_n))) +
+  geom_smooth(method = "lm", se = F, aes(group = 1),
+              colour = "black", size = 0.5)+
+  scale_fill_brewer(palette = "Set1")+
+  scale_colour_brewer(palette = "Set1")+
+  scale_shape_manual(values = c(22,21))+
+  scale_alpha_manual(values = c(1,0.6))+
+  guides(fill = guide_legend(override.aes = list(shape = 21), title = "Habitat\ndiversity"))+
+  labs(x = "16S gamma diversity", y = "nifH gamma diversity")+
+  theme_classic(base_size = 15)+
+  theme(legend.position = "bottom")
+
+
 ```
 
 
