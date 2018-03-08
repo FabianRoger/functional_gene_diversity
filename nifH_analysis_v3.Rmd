@@ -921,8 +921,7 @@ VST_nif[VST_nif < 0 ]  <- 0
 VST_nif <- VST_nif[ - c(which(rowSums(VST_nif) == 0)), ]
 
 if(FALSE) {
-  
-  TREE_nif <- read.tree("TREE_nifh_um_oT.tre")
+
   PS_nif <- phyloseq(otu_table(VST_nif, taxa_are_rows = T),
                     phy_tree(TREE_nif))
 
