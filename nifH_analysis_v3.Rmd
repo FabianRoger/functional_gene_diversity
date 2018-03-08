@@ -1,7 +1,7 @@
 ---
 title: "Data_analysis"
 output:
-  html_document:
+  html_notebook:
     toc: yes
     toc_depth: 4
     toc_float: true
@@ -36,6 +36,7 @@ library(vegan)
 library(cvTools)
 library(car)
 library(ape)
+library(quantreg)
 ```
 
 
@@ -131,10 +132,12 @@ Figure_S4 <- arrangeGrob(N2, ResidN2, nrow = 1)
 
 ggsave("Figure_S4.png", Figure_S4, width = 6, height = 3)
 ggsave("Figure_S4.pdf", Figure_S4, width = 6, height = 3)
-
-plot(Figure_S4)
-
 ```
+
+```{r}
+grid.arrange(N2, ResidN2, nrow = 1) 
+```
+
 
 
 #nifH data from Andersson et al 2014
@@ -158,6 +161,8 @@ Andersson <-
 Andersson_log10 <-  mutate_at(Andersson, vars(nifH, N2_fixation), log)
   
 mod_nifH_And <- lm(N2_fixation ~ nifH, Andersson_log10)
+
+glance(mod_nifH_And)
 
 PRED_PI_A <- 
 predict(mod_nifH_And, data = Andersson, interval = "predict", type = "response") %>% 
@@ -324,11 +329,15 @@ Andersson_range_log <-  mutate_at(Andersson_range, vars(nifH, N2_fixation), log)
 
 mod_nifH_And_range <- lm(N2_fixation ~ nifH, Andersson_range_log)
 
-summary(mod_nifH_And_range)
+tidy(mod_nifH_And_range) %>% 
+  mutate_if(is.numeric, signif, 2)
+
+glance(mod_nifH_And_range) %>% 
+  mutate_if(is.numeric, signif, 2)
 ```
 
-the model for the truncated range is still significant (p =  0.007) but the goodness of fits drops down to 15%
-(R-square = 0.155)
+the model for the truncated range is still significant (p =  0.007) but the goodness of fits drops down to 18%
+(R-square = 0.18)
 
 ```{r}
 PRED_PI_A_range <- 
@@ -444,20 +453,15 @@ Figure_1_in_range
 + prediction statistics
 
 ```{r}
-
-# RMSE for Alsterberg et al - predicted by Andersson et al model
-rmspe(Pred_Nfix$N2_fixation, Pred_Nfix$fit)
-
-# RSME for Alsterberg et al - predicted by mean
-rmspe(Pred_Nfix$N2_fixation, mean(Pred_Nfix$N2_fixation))
-
-# RMSE for Alsterberg et al - predicted by Andersson et al model - common range
-rmspe(Pred_Nfix_range$N2_fixation, Pred_Nfix_range$fit)
-
-# RSME for Alsterberg et al - predicted by mean - common range
-rmspe(Pred_Nfix_range$N2_fixation, mean(Pred_Nfix_range$N2_fixation))
-
-
+data.frame(
+  FOR = c("full range", "full range", "common range", "common range"),
+  BY = c("Andersson et al", "Intercept", "Andersson et al", "Intercept"),
+  rmspe = c(rmspe(Pred_Nfix$N2_fixation, Pred_Nfix$fit),
+            rmspe(Pred_Nfix$N2_fixation, mean(Pred_Nfix$N2_fixation)),
+            rmspe(Pred_Nfix_range$N2_fixation, Pred_Nfix_range$fit),
+            rmspe(Pred_Nfix_range$N2_fixation, mean(Pred_Nfix_range$N2_fixation)))
+) %>% 
+  mutate(rmspe = signif(rmspe, 2))
 ```
 
 ## Figure 1
@@ -502,13 +506,12 @@ How much of the variation in process rate can we predict with community metrics
 + 16S diversity 
 + nif_h diversity
 + nif_h abundance
-(+ fraction cyanobacterial nifH genes)
 + habitat type
 
 below I show the distribution of the *predictor* variables in the four sediment types.
 
 
-```{r, fig.width=6}
+```{r}
 DIV <- read.table("Diversity_estimations.txt")
 
 FuncDat_raw <- 
@@ -526,7 +529,8 @@ FuncDat <- FuncDat_raw %>%
 
 FuncDat %>% 
   select(effN_nifh, effN_bac, corr_nifH, sediment) %>% 
-  ggpairs(aes(colour = sediment))
+  ggpairs(aes(colour = sediment)) %>% 
+  print(., progress = FALSE)
   
   
   
@@ -575,6 +579,51 @@ gg_diag <- function(x) {
   
 
 ```
+
+### summary community metrics
+
+```{r}
+FuncDat %>% 
+  select(-Level, -sample) %>% 
+  gather(variable, value, -sediment) %>% 
+  group_by(sediment, variable) %>% 
+  summarise_at("value", .funs = c("min", "max", "mean", "median")) %>% 
+  arrange(variable, sediment) %>% 
+  mutate_if(is.numeric, signif, 3) %>% 
+  mutate_if(is.numeric, format, scientific=FALSE) 
+  
+```
+
+```{r}
+
+FuncDat %>% 
+  select(-Level, -sample) %>% 
+  gather(variable, value, -sediment) %>% 
+  group_by(variable) %>% 
+  nest() %>% 
+  mutate(Model = map(data, function(x) lm(value ~ sediment, data = x))) %>% 
+  mutate(glance_lm=Model %>% map(glance),
+         `F-statistic` = glance_lm %>% map_dbl("statistic"),
+         rsq=glance_lm %>% map_dbl("r.squared"),
+         pval=glance_lm %>% map_dbl("p.value"),
+         df = glance_lm %>% map_dbl("df"),
+         df.residual = glance_lm %>% map_dbl("df.residual")) %>% 
+  mutate_if(is.numeric, signif, 2) %>% 
+  select(-data, -Model, -glance_lm )
+      
+  
+```
+
+```{r}
+lm(effN_nifh ~ effN_bac, data = FuncDat) %>% 
+  glance()
+```
+
+```{r}
+lm(effN_nifh ~ corr_nifH, data = FuncDat) %>% 
+  glance()
+```
+
 
 ### regression effN_bac
 ```{r}
@@ -693,6 +742,14 @@ plot_nifH_ab
 
 ```
 
+### quantile regression
+
+```{r}
+tidy(rq(N2_fixation ~ corr_nifH, data=FuncDat, tau = 0.2))
+
+```
+
+
 ### regression sediment
 ```{r}
 
@@ -770,9 +827,7 @@ gg_diag(mod_full)
 # Type II sum of squares testing the main effects (we don't include interactions)
 car::Anova(mod_full, type = 2)
 
-#mod_full %>% tidy %>% mutate_if(is.numeric, function(x) round(x,2)) %>%  kable
-
-mod_full %>% glance %>% mutate_all(function(x) round(x,2)) %>%  kable
+mod_full %>% glance %>% mutate_all(round, 2)
 
 ```
 
@@ -848,6 +903,7 @@ summary(res_nif)
 
 + With this design, we test for a correlation between N2_fixation rates and logfold change in OTU abundance - allowing for slopes and intercept to vary between sediments. 
 + No OTU shows a significant correlation
+
 
 ### Differences between sediments
 
