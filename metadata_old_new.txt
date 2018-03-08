@@ -50,8 +50,6 @@
 "49" 4 "ruppia" "B" "summer" 24 1
 "50" 4 "ruppia" "C" "summer" 38 1
 "51" 4 "ruppia" "D" "summer" 19 1
-<<<<<<< HEAD
-=======
 "52" 1 "sand" "A" "autumn" 94 1
 "53" 1 "sand" "B" "autumn" 93 1
 "54" 1 "sand" "C" "autumn" 75 1
@@ -157,4 +155,4 @@
 "154" 4 "ruppia" "C" "spring" 116 1
 "155" 4 "ruppia" "D" "spring" 139 1
 "156" 3 "silt" "D" "summer" NA 1
->>>>>>> new
+
