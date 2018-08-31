@@ -17,6 +17,7 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE, tidy = TRUE, highlight = TRU
 library(tidyverse)
 library(broom)
 library(readxl)
+library(httr)
 
 # report 
 library(knitr)
@@ -30,7 +31,7 @@ library(corrplot)
 
 # data analysis
 library(phyloseq)
-library(VennDiagram)
+#library(VennDiagram)
 library(DESeq2)
 library(vegan)
 library(cvTools)
@@ -43,24 +44,28 @@ library(quantreg)
 read in and join data
 
 ```{r}
-meta <- read_tsv("meta_clean.txt")
+meta <- read_tsv("https://ndownloader.figshare.com/files/10683334")
 
 # Nitrogen fixation data 
 # Unit: µmol Ethen / gram ww Sediment / day
 
-N_func <- read_excel("nitrogenfixation(summerdata)_1.1.xlsx", "final_data") %>% 
+GET("https://ndownloader.figshare.com/files/10683343", write_disk(tf <- tempfile(fileext = ".xlsx")))
+
+N_func <- read_excel(tf, "final_data") %>% 
   mutate(N2_fixation = eten_μmol_g_day/3)  #eten to N2
 
 # nifH abundance data
 # Unit: copies per Gramm sediment wet weight
 
-qPCR <- read_excel("DNA data_summer_with_nIfH.xlsx", "final_data") %>% 
+
+GET("https://ndownloader.figshare.com/files/10683349", write_disk(tf2 <- tempfile(fileext = ".xlsx")))
+
+qPCR <- read_excel(tf2, "final_data") %>% 
   dplyr::rename(nifH = nifH_cop_g_sediment)
 
 
 # fraction nifH parralogues
-
-Par_frct <- read.table("Fraction_Parallogues_nifh.txt", sep ="\t", 
+Par_frct <- read.table("https://ndownloader.figshare.com/files/10683358", sep ="\t", 
                        header = T, stringsAsFactors = FALSE)
 
 
@@ -149,7 +154,9 @@ Andersson, B., Sundbäck, K., Hellman, M., Hallin, S., & Alsterberg, C. (2014). 
 # Nitrogen fixation is in *µmol Ethylen x gram^-1 w/w sed. x day^-1*
 # nifH abundance is in *copies nifH x mili-gram^-1 w/w sed.*
 
-Andersson <- read_excel("Andersson_Björn_nifH.xlsx",sheet = "final_data")
+GET("https://ndownloader.figshare.com/files/10683367", write_disk(tf3 <- tempfile(fileext = ".xlsx")))
+
+Andersson <- read_excel(tf3, sheet = "final_data")
 
 Andersson <- 
   Andersson[,c(1:3)] %>% 
