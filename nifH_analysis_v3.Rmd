@@ -493,7 +493,7 @@ Figure_1_in_range_data %>%
        labels = trans_format("log10", math_format(10^.x)))+
   scale_fill_manual(values = c( "#377eb8", "#a50f15"))+
   labs(x = expression(nifH~(copies~g^-1)),
-       y = expression(N[2]~(µmol~g^-1~d^-1)),
+       y = expression(dinitrogen~fixation~(µmol~N[2]~g^-1~d^-1)),
        fill = "Study")+
   theme_bw()+
   theme(legend.position = "none")
@@ -632,7 +632,7 @@ lm(effN_nifh ~ corr_nifH, data = FuncDat) %>%
 ```
 
 
-### regression effN_bac
+### regression effN_bac (excluded from manuscript)
 ```{r}
 
 mod_16Sdiv <-  lm(sqrt(N2_fixation) ~ effN_bac, FuncDat)
@@ -658,7 +658,7 @@ plot_16Sdiv <-
            alpha = 0.5)+
   theme_bw(base_size = 12)+
   labs(x = "effective number of bacterial otus",
-       y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))+
+       y = expression(dinitrogen~fixation~(µmol~N[2]~g^-1~d^-1)))+
   #scale_y_continuous(limits = c(-13,55))+
   scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
   scale_x_continuous(limits = c(0,NA))+
@@ -696,9 +696,9 @@ plot_nifh <-
            label = paste("nifH diversity",
                          paste("p", round(mod_nifh_g$p.value, 2)), sep= "\n"),
                          alpha = 0.5)+
-  theme_bw(base_size = 12)+
+  theme_bw(base_size = 10)+
   labs(x = "effective number of nifH otus", 
-       y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))+
+       y = expression(dinitrogen~fixation~(µmol~N[2]~g^-1~d^-1)))+
   #scale_y_continuous(limits = c(-13,55))+
   scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
   scale_x_continuous(limits = c(0,NA))+
@@ -735,9 +735,9 @@ plot_nifH_ab  <-
                          paste("p", round(mod_nifH_ab_g$p.value, 2)),
                          sep= "\n"),
                          alpha = 0.5)+
-  theme_bw(base_size = 12)+
-  labs(x = expression(nifH~(copies~g^-1)),
-       y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))+
+  theme_bw(base_size = 10)+
+  labs(x = expression(corrected~nifH~(copies~g^-1)),
+       y = expression(dinitrogen~fixation~(µmol~N[2]~g^-1~d^-1)))+
   #scale_y_continuous(limits = c(-13,55))+
   scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
   scale_x_continuous(limits = c(0,NA))+
@@ -790,9 +790,9 @@ plot_hab <-
                          paste("R2", round(mod_hab_g$r.squared, 2))," ; ",
                          paste("p", round(mod_hab_g$p.value, 3)), sep = ""),
                          alpha = 0.7)+
-  theme_bw(base_size = 12)+
+  theme_bw(base_size = 10)+
   labs(x = "sediment types",
-       y = expression(resid.~N[2]~(µmol~g^-1~d^-1)))+
+       y = expression(dinitrogen~fixation~(µmol~N[2]~g^-1~d^-1)))+
   #scale_y_continuous(limits = c(-13,55))+
   scale_y_sqrt(breaks=c(0.01,0.04, 0.08, 0.15))+
   theme(legend.position = "none")+
@@ -808,13 +808,13 @@ plot_hab
 
 ### regressions
 ```{r, fig.width= 6, fig.height=4.5}
-Figure_2 <- plot_grid(plot_16Sdiv, plot_nifh, plot_nifH_ab,  plot_hab,
-                        align = "hv", labels="auto") 
+Figure_2 <- plot_grid(plot_nifh, plot_nifH_ab,  plot_hab,
+                        align = "hv", labels="auto", ncol = 3) 
                         
 plot(Figure_2)
 
-ggsave("Figure_2.pdf", plot = Figure_2, width = 8, height = 6)
-ggsave("Figure_2.jpeg", plot = Figure_2, width = 8, height = 6)
+ggsave("Figure_2.pdf", plot = Figure_2, width = 9, height = 3)
+ggsave("Figure_2.jpeg", plot = Figure_2, width = 9, height = 3)
 ```
 
 ### full Model
@@ -863,7 +863,7 @@ We also use the *rlogTransformation* implemented in the DESeq2 package to normal
 
 + Reading in data & data wrangling.
 ```{r}
-OTU_nifh <- read.table("OTU_nifh_clean.txt", sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+OTU_nifh <- read.table("https://ndownloader.figshare.com/files/10683388") 
 
 # Fix sample names
 rownames(OTU_nifh) <- sub("F", "", rownames(OTU_nifh))
@@ -873,7 +873,20 @@ FuncDat <- FuncDat[!is.na(FuncDat$sample),]
 rownames(FuncDat) <- FuncDat$sample
 
 # read tree
-TREE_nif <- read.tree("TREE_nifh_um_oT.tre")
+TREE_nif <- read.tree("https://ndownloader.figshare.com/files/10683418")
+
+#read cluster ID for each OTU
+
+Cluster <- read.table("https://ndownloader.figshare.com/files/10683406", stringsAsFactors = FALSE)
+
+Cluster <- 
+Cluster %>% 
+  mutate(main = sub("main cluster = ", "", main)) %>% 
+  mutate(sub = sub("subcluster = ", "", sub)) %>% 
+  select(-Zehr_group)
+
+Cluster_m <- as.matrix(Cluster[,2:3])
+rownames(Cluster_m) <- Cluster$names
   
 
 ```
@@ -892,6 +905,11 @@ TREE_nif <- read.tree("TREE_nifh_um_oT.tre")
 
 ```{r}
 
+nifH_ps <- phyloseq(otu_table(OTU_nifh, taxa_are_rows = F),
+                   sample_data(FuncDat),
+                   tax_table(Cluster_m))
+
+
 nifH_d2 <- phyloseq_to_deseq2(nifH_ps, ~ sediment + sediment * N2_fixation)
 
 Sigdiff_nif <- DESeq(nifH_d2, fitType = "parametric", test = "Wald",
@@ -905,12 +923,52 @@ res_nif <-  results(Sigdiff_nif,
                     cooksCutoff = FALSE, tidy =F) 
 
 summary(res_nif)
-
 ```
 
 + With this design, we test for a correlation between N2_fixation rates and logfold change in OTU abundance - allowing for slopes and intercept to vary between sediments. 
 + No OTU shows a significant correlation
 
++ testing a correlation after agglomerating counts by subcluster
+```{r}
+
+nifH_ps_sub <- tax_glom(nifH_ps, taxrank="sub", NArm=TRUE, bad_empty=c(NA, "", " ", "\t"))
+
+nifH_d2 <- phyloseq_to_deseq2(nifH_ps_sub, ~ sediment + sediment * N2_fixation)
+
+Sigdiff_nif <- DESeq(nifH_d2, fitType = "parametric", test = "Wald",
+                     minReplicatesForReplace = Inf, betaPrior = FALSE)
+
+
+resultsNames(Sigdiff_nif)
+
+res_nif <-  results(Sigdiff_nif,  
+                    name = "N2_fixation",
+                    cooksCutoff = FALSE, tidy =F) 
+
+summary(res_nif)
+```
+
+
++ testing a correlation after agglomerating counts by main cluster
+```{r}
+
+nifH_ps_main <- tax_glom(nifH_ps, taxrank="main", NArm=TRUE, bad_empty=c(NA, "", " ", "\t"))
+
+nifH_d2 <- phyloseq_to_deseq2(nifH_ps_main, ~ sediment + sediment * N2_fixation)
+
+Sigdiff_nif <- DESeq(nifH_d2, fitType = "parametric", test = "Wald",
+                     minReplicatesForReplace = Inf, betaPrior = FALSE)
+
+
+resultsNames(Sigdiff_nif)
+
+res_nif <-  results(Sigdiff_nif,  
+                    name = "N2_fixation",
+                    cooksCutoff = FALSE, tidy =F) 
+
+summary(res_nif)
+    
+```
 
 ### Differences between sediments
 
@@ -975,14 +1033,14 @@ NMDS_plot_nifh
 
 We see a clear separation of the samples by habitat and the permanova confirms that the differnces are significant (p = 0.001, r2 = 0.59)
 
-## 16S
+## 16S 
 
 + Reading in data & data wrangling.
 
 Read in the relevant files:
 ```{r, cache = TRUE}
-OTU_bac <- read.table("16S_analysis/OTU_bac_clean.txt", header = TRUE, stringsAsFactors = FALSE)
-TAX <- read.table("16S_analysis/Tax_clean.txt",  header = TRUE, stringsAsFactors = FALSE)
+OTU_bac <- read.table("https://ndownloader.figshare.com/files/10683412", header = TRUE, stringsAsFactors = FALSE)
+TAX <- read.table("https://ndownloader.figshare.com/files/10683415",  header = TRUE, stringsAsFactors = FALSE)
 TAX_m <- as.matrix(TAX)
 
 dimnames(OTU_bac)[[1]] <- sub("C", "", dimnames(OTU_bac)[[1]])
@@ -1014,6 +1072,44 @@ summary(res_nif)
 ```
 
 + the abundance no (single) 16S OTU correlates with N2_fixation
+
+
++ testing after agglomeration to Familiy level
+```{r}
+
+ps_16S_family <- tax_glom(ps_16S, taxrank = "Family")
+
+
+d2_16S_N2 <- phyloseq_to_deseq2(ps_16S_family, ~sediment + sediment*N2_fixation)
+
+Sigdiff_16S_N2 <- DESeq(d2_16S_N2, fitType = "parametric", test = "Wald", minReplicatesForReplace = Inf)
+
+resultsNames(Sigdiff_16S_N2)
+
+res_nif <-  results(Sigdiff_16S_N2,  
+                    name = "N2_fixation",
+                    cooksCutoff = FALSE, tidy =F) 
+
+summary(res_nif)
+
+plotMA(res_nif)
+
+
+sig_OTU <- res_nif %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "OTU") %>% 
+  filter(padj <= 0.1) 
+
+sig_OTU
+
+tax_table(ps_16S_family)[sig_OTU$OTU]
+
+plotCounts(d2_16S_N2, gene=which.min(res_nif$padj), intgroup="N2_fixation", returnData = T, normalized =F) %>% 
+  left_join(FuncDat_raw) %>% 
+  ggplot(aes(x = count, y = N2_fixation, colour = sediment))+
+  geom_smooth(se = F, method = "lm")+
+  geom_point()
+```
 
 ### Differences between sediments
 
