@@ -1028,6 +1028,12 @@ NMDS_plot_nifh <- ggplot(NMDS_nifh, aes(x = MDS1, y =MDS2, colour = sediment))+
 
 NMDS_plot_nifh
 
+# mantel test for correlation between community composition and denitrification rate
+mantel(dist_nif, vegdist(as.matrix(FuncDat[ match( attr(dist_nif,"Labels"),FuncDat$sample),]$N2_fixation), dist = "euc"))
+       
+
+
+
 ```
 
 
@@ -1167,6 +1173,9 @@ NMDS_plot_16S <-
   
 
 NMDS_plot_16S
+
+# mantel test for correlation between community composition and denitrification rate
+mantel(dist_16S, vegdist(as.matrix(FuncDat[ match( attr(dist_nif,"Labels"),FuncDat$sample),]$N2_fixation), dist = "euc"))
 ```
 
 
