@@ -1039,6 +1039,53 @@ mantel(dist_nif, vegdist(as.matrix(FuncDat[ match( attr(dist_nif,"Labels"),FuncD
 
 We see a clear separation of the samples by habitat and the permanova confirms that the differnces are significant (p = 0.001, r2 = 0.59)
 
+### summarize nifH genes by habitat
+
+```{r}
+options(digits=3)
+
+group_by(FuncDat, sediment) %>% 
+  select(sediment, nifH, corr_nifH, frct.par, effN_nifh, effN_bac) %>% 
+  mutate(frct.par = frct.par * 100) %>% 
+  summarise_all(.funs = c("mean", "sd")) %>% 
+  select(sediment, sort(colnames(.)[-1])) %>% 
+  mutate_if(is.numeric, function(x) signif(x,3)) %>% 
+  mutate(sediment = c("Cyanobacterial mats","Ruppia maritima meadows","Sandy beach","Silty mud")) %>% 
+  rename(sediment = "habitat type") %>% 
+  mutate(`nifH` = paste(nifH_mean, nifH_sd, sep = " ± ")) %>% 
+  mutate(`corrected nifH` = paste(corr_nifH_mean, corr_nifH_sd, sep = " ± ")) %>% 
+  mutate(`fraction parallogues` = paste(frct.par_mean, frct.par_sd, sep = " ± ")) %>% 
+  mutate(`nifH diversity` = paste(effN_nifh_mean, effN_nifh_sd, sep = " ± ")) %>% 
+  mutate(`16S diversity` = paste(effN_bac_mean, effN_bac_sd, sep = " ± ")) %>% 
+  select_if(is.character)  
+
+
+         
+otu_table(nifH_ps_sub) %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "sample") %>% 
+  gather(OTU, abundance, -sample) %>% 
+  left_join(rownames_to_column(as.data.frame(tax_table(nifH_ps_sub)), var = "OTU")) %>% 
+  mutate(sample = as.numeric(sample)) %>% 
+  left_join(meta) %>% 
+  select(sediment, sample, main, abundance) %>% 
+  group_by(sample, main) %>% 
+  summarize(sediment = unique(sediment), abundance = sum(abundance)) %>% 
+  group_by(sample) %>% 
+  mutate(abundance = abundance / sum(abundance) * 100) %>% 
+  group_by(sediment, main) %>% 
+  summarise_at("abundance", .funs=c("mean", "sd")) %>% 
+  filter(main %in% c("1", "3")) %>% 
+  mutate_if(is.numeric, round, 1) %>% 
+  mutate(proportion = paste(mean, sd, sep = " ± ")) %>% 
+  select(-mean, -sd) %>% 
+  spread(main, proportion) %>% 
+  mutate(sediment = c("Cyanobacterial mats","Ruppia maritima meadows","Sandy beach","Silty mud")) %>% 
+
+
+```
+
+
 ## 16S 
 
 + Reading in data & data wrangling.
